@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
-import os
-import sys
-import traceback
+import json
 import threading
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
@@ -84,6 +82,29 @@ class AdvancedSettingsWidget(QWidget):
 
         sidebar_layout.addStretch()
 
+        # Sidebar Toggle Button (switches back to Basic Menu)
+        self.mode_toggle_btn = QPushButton("Basic Menu")
+        self.mode_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mode_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(35, 35, 35, 170);
+                color: #FFFFFF;
+                font-size: 15px;
+                font-weight: bold;
+                padding: 14px 20px;
+                border-radius: 10px;
+                border: 2px solid rgba(255, 255, 255, 30);
+                text-align: center;
+            }}
+            QPushButton:hover, QPushButton:focus {{
+                color: #FFFFFF;
+                background-color: rgba(65, 65, 65, 220);
+                border: 2px solid {theme_color};
+            }}
+        """)
+        self.mode_toggle_btn.clicked.connect(self.handle_mode_toggle)
+        sidebar_layout.addWidget(self.mode_toggle_btn)
+
         # Bottom Left: Back to Launcher button
         self.back_btn = QPushButton("← Back to Launcher")
         self.back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -124,6 +145,11 @@ class AdvancedSettingsWidget(QWidget):
         root_layout.addWidget(self.pages, stretch=1)
 
         self.switch_tab(0)
+
+    def handle_mode_toggle(self):
+        if self.on_toggle_advanced:
+            # Currently in Advanced, switch back to Basic (False)
+            self.on_toggle_advanced(False)
 
     def switch_tab(self, index):
         self.pages.setCurrentIndex(index)
@@ -186,20 +212,9 @@ class AdvancedSettingsWidget(QWidget):
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
-        desc = QLabel("Advanced mode is enabled. Uncheck to return to the simplified basic settings view.")
+        desc = QLabel("Advanced mode is enabled. Use the sidebar button to switch back to the Basic Menu.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
-
-        form = QFormLayout()
-        form.setVerticalSpacing(15)
-
-        self.advanced_cb = QCheckBox("Enable Advanced Settings")
-        self.advanced_cb.setStyleSheet("color: white; font-size: 16px; font-weight: bold; border: none;")
-        self.advanced_cb.setChecked(self.launcher.config.get("_advanced_mode", True))
-        self.advanced_cb.toggled.connect(self.on_toggle_advanced)
-
-        form.addRow(self.advanced_cb)
-        layout.addLayout(form)
         layout.addStretch()
         return card
 
@@ -834,15 +849,14 @@ class AdvancedSettingsWidget(QWidget):
                 reload_logs()
 
         def open_file():
+            import subprocess, os, sys
             if LOG_FILE.exists():
                 if sys.platform == "win32":
                     os.startfile(str(LOG_FILE))
                 elif sys.platform == "darwin":
-                    import subprocess as _sp
-                    _sp.Popen(["open", str(LOG_FILE)])
+                    subprocess.Popen(["open", str(LOG_FILE)])
                 else:
-                    import subprocess as _sp
-                    _sp.Popen(["xdg-open", str(LOG_FILE)])
+                    subprocess.Popen(["xdg-open", str(LOG_FILE)])
             else:
                 QMessageBox.information(self, "Log File", "Log file does not exist yet.")
 
