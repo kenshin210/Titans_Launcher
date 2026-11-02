@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
-import os
-import sys
-import traceback
+import json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QCheckBox, QFileDialog, QMessageBox, QStackedWidget,
@@ -78,6 +76,29 @@ class BasicSettingsWidget(QWidget):
 
         sidebar_layout.addStretch()
 
+        # Sidebar Toggle Button (replaces checkbox)
+        self.mode_toggle_btn = QPushButton("Advanced Menu")
+        self.mode_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mode_toggle_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(35, 35, 35, 170);
+                color: #FFFFFF;
+                font-size: 15px;
+                font-weight: bold;
+                padding: 14px 20px;
+                border-radius: 10px;
+                border: 2px solid rgba(255, 255, 255, 30);
+                text-align: center;
+            }}
+            QPushButton:hover, QPushButton:focus {{
+                color: #FFFFFF;
+                background-color: rgba(65, 65, 65, 220);
+                border: 2px solid {theme_color};
+            }}
+        """)
+        self.mode_toggle_btn.clicked.connect(self.handle_mode_toggle)
+        sidebar_layout.addWidget(self.mode_toggle_btn)
+
         # Bottom Left: Back to Launcher button
         self.back_btn = QPushButton("← Back to Launcher")
         self.back_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -115,6 +136,11 @@ class BasicSettingsWidget(QWidget):
         root_layout.addWidget(self.pages, stretch=1)
 
         self.switch_tab(0)
+
+    def handle_mode_toggle(self):
+        if self.on_toggle_advanced:
+            # Currently in Basic, switch to Advanced (True)
+            self.on_toggle_advanced(True)
 
     def switch_tab(self, index):
         self.pages.setCurrentIndex(index)
@@ -177,20 +203,9 @@ class BasicSettingsWidget(QWidget):
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
-        desc = QLabel("Configure basic launcher behavior or enable advanced control for fine-tuning.")
+        desc = QLabel("Configure basic launcher behavior or switch to the Advanced Menu using the sidebar control.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
-
-        form = QFormLayout()
-        form.setVerticalSpacing(15)
-
-        self.advanced_cb = QCheckBox("Enable Advanced Settings")
-        self.advanced_cb.setStyleSheet("color: white; font-size: 16px; font-weight: bold; border: none;")
-        self.advanced_cb.setChecked(self.launcher.config.get("_advanced_mode", False))
-        self.advanced_cb.toggled.connect(self.on_toggle_advanced)
-
-        form.addRow(self.advanced_cb)
-        layout.addLayout(form)
         layout.addStretch()
         return card
 
