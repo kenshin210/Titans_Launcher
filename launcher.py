@@ -21,13 +21,12 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction
 
-# Optional evdev import for direct Linux kernel gamepad support
+# Optional pygame-ce import for robust gamepad support
 try:
-    import evdev
-    from evdev import ecodes, InputDevice
-    EVDEV_AVAILABLE = True
+    import pygame
+    PYGAME_AVAILABLE = True
 except ImportError:
-    EVDEV_AVAILABLE = False
+    PYGAME_AVAILABLE = False
 
 try:
     from Settings.Logger import log_critical, log_error, log_warning, log_info, install_excepthook
@@ -167,50 +166,61 @@ def fetch_ntp_time(server_address, offset_hours):
 
     return datetime.now(timezone(timedelta(hours=offset_hours)))
 
-class XboxControllerThread(QThread):
+class PygameControllerThread(QThread):
     button_pressed = pyqtSignal(str)
 
     def run(self):
-        if not EVDEV_AVAILABLE:
-            log_warning("evdev module not available. Native kernel gamepad input disabled.")
+        if not PYGAME_AVAILABLE:
+            log_warning("pygame-ce module not available. Gamepad input disabled.")
             return
 
-        while True:
-            device_path = None
-            try:
-                devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-                for dev in devices:
-                    name_lower = dev.name.lower()
-                    if any(k in name_lower for k in ["xbox", "gamepad", "controller", "microsoft", "wireless controller"]):
-                        device_path = dev.path
-                        log_info(f"Detected game controller: {dev.name} at {device_path}")
-                        break
+        try:
+            pygame.init()
+            pygame.joystick.init()
+        except Exception as e:
+            log_error(f"Failed to initialize pygame joystick subsystem: {e}")
+            return
 
-                if device_path:
-                    gamepad = InputDevice(device_path)
-                    for event in gamepad.read_loop():
-                        if event.type == ecodes.EV_KEY:
-                            if event.value == 1:  # Button Down
-                                if event.code in (ecodes.BTN_A, 304):
-                                    self.button_pressed.emit("A")
-                                elif event.code in (ecodes.BTN_B, 305):
-                                    self.button_pressed.emit("B")
-                        elif event.type == ecodes.EV_ABS:
-                            if event.code == ecodes.ABS_HAT0X:
-                                if event.value == 1:
-                                    self.button_pressed.emit("RIGHT")
-                                elif event.value == -1:
-                                    self.button_pressed.emit("LEFT")
-                            elif event.code == ecodes.ABS_HAT0Y:
-                                if event.value == 1:
-                                    self.button_pressed.emit("DOWN")
-                                elif event.value == -1:
-                                    self.button_pressed.emit("UP")
-                else:
-                    time.sleep(5)  # Retry scanning for controller periodically
+        joysticks = {}
+        last_dpad_state = {}
+
+        while True:
+            try:
+                # Handle hot-plugging / connecting joysticks
+                pygame.event.pump()
+                
+                # Check for newly connected joysticks
+                for i in range(pygame.joystick.get_count()):
+                    if i not in joysticks:
+                        js = pygame.joystick.Joystick(i)
+                        js.init()
+                        joysticks[i] = js
+                        log_info(f"Pygame-ce detected controller: {js.get_name()} (ID: {i})")
+
+                # Poll events from active joysticks
+                for event in pygame.event.get():
+                    if event.type == pygame.JOYBUTTONDOWN:
+                        # Standard Xbox layout mapping: Button 0 = A, Button 1 = B
+                        if event.button == 0:
+                            self.button_pressed.emit("A")
+                        elif event.button == 1:
+                            self.button_pressed.emit("B")
+                    elif event.type == pygame.JOYHATMOTION:
+                        # D-Pad (Hat 0) motion: (x, y)
+                        hat_x, hat_y = event.value
+                        if hat_x == 1:
+                            self.button_pressed.emit("RIGHT")
+                        elif hat_x == -1:
+                            self.button_pressed.emit("LEFT")
+                        if hat_y == 1:
+                            self.button_pressed.emit("UP")
+                        elif hat_y == -1:
+                            self.button_pressed.emit("DOWN")
+
+                time.sleep(0.03) # ~30fps polling loop to save CPU
             except Exception as e:
-                log_warning(f"Controller input listener error or device disconnected: {e}")
-                time.sleep(5)
+                log_warning(f"Pygame controller polling error: {e}")
+                time.sleep(2)
 
 class ThemedMessageBox(QDialog):
     def __init__(self, parent=None, title="", message="", theme_color="#DC143C"):
@@ -469,9 +479,9 @@ class MainApp(QWidget):
         self.initUI()
         self.start_ntp_sync_thread()
 
-        # Initialize Xbox controller monitoring thread if evdev is present
-        if EVDEV_AVAILABLE:
-            self.controller_thread = XboxControllerThread()
+        # Initialize Pygame-ce controller monitoring thread
+        if PYGAME_AVAILABLE:
+            self.controller_thread = PygameControllerThread()
             self.controller_thread.button_pressed.connect(self.handle_controller_input)
             self.controller_thread.start()
 
