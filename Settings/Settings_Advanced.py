@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
-import json
+import os
+import sys
+import traceback
 import threading
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
@@ -832,14 +834,15 @@ class AdvancedSettingsWidget(QWidget):
                 reload_logs()
 
         def open_file():
-            import subprocess, os, sys
             if LOG_FILE.exists():
                 if sys.platform == "win32":
                     os.startfile(str(LOG_FILE))
                 elif sys.platform == "darwin":
-                    subprocess.Popen(["open", str(LOG_FILE)])
+                    import subprocess as _sp
+                    _sp.Popen(["open", str(LOG_FILE)])
                 else:
-                    subprocess.Popen(["xdg-open", str(LOG_FILE)])
+                    import subprocess as _sp
+                    _sp.Popen(["xdg-open", str(LOG_FILE)])
             else:
                 QMessageBox.information(self, "Log File", "Log file does not exist yet.")
 
