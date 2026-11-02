@@ -1,0 +1,16 @@
+# pyrefly.toml — Pyrefly type checker configuration for HTPC Launcher
+# https://pyrefly.org/en/stable/configuration/
+
+[python]
+# Point to the Python 3.13 interpreter that has PyQt6, cv2, numpy installed
+python_interpreter = "C:/Users/contrasttech/AppData/Local/Programs/Python/Python313/python.exe"
+
+# Include the HTPC_Launcher root so that `from Settings.XXX import ...` resolves
+python_path = ["."]
+
+[errors]
+# cv2 (opencv-python 5.x) ships no .pyi type stubs — suppress missing-import
+missing-import = false
+
+# Suppress untyped-import warnings for stub-less third-party packages
+untyped-import = false
