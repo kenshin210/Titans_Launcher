@@ -17,9 +17,17 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QUrl, QTimer, QSize, QPropertyAnimation, QEasingCurve, QRect,
-    pyqtSignal, QPoint, QParallelAnimationGroup
+    pyqtSignal, QPoint, QParallelAnimationGroup, QThread
 )
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction
+
+# Optional evdev import for direct Linux kernel gamepad support
+try:
+    import evdev
+    from evdev import ecodes, InputDevice
+    EVDEV_AVAILABLE = True
+except ImportError:
+    EVDEV_AVAILABLE = False
 
 try:
     from Settings.Logger import log_critical, log_error, log_warning, log_info, install_excepthook
@@ -158,6 +166,136 @@ def fetch_ntp_time(server_address, offset_hours):
         log_warning(f"NTP sync timed out/failed for {server_address}. Using system clock.", details=str(e))
 
     return datetime.now(timezone(timedelta(hours=offset_hours)))
+
+class XboxControllerThread(QThread):
+    button_pressed = pyqtSignal(str)
+
+    def run(self):
+        if not EVDEV_AVAILABLE:
+            log_warning("evdev module not available. Native kernel gamepad input disabled.")
+            return
+
+        while True:
+            device_path = None
+            try:
+                devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
+                for dev in devices:
+                    name_lower = dev.name.lower()
+                    if any(k in name_lower for k in ["xbox", "gamepad", "controller", "microsoft", "wireless controller"]):
+                        device_path = dev.path
+                        log_info(f"Detected game controller: {dev.name} at {device_path}")
+                        break
+
+                if device_path:
+                    gamepad = InputDevice(device_path)
+                    for event in gamepad.read_loop():
+                        if event.type == ecodes.EV_KEY:
+                            if event.value == 1:  # Button Down
+                                if event.code in (ecodes.BTN_A, 304):
+                                    self.button_pressed.emit("A")
+                                elif event.code in (ecodes.BTN_B, 305):
+                                    self.button_pressed.emit("B")
+                        elif event.type == ecodes.EV_ABS:
+                            if event.code == ecodes.ABS_HAT0X:
+                                if event.value == 1:
+                                    self.button_pressed.emit("RIGHT")
+                                elif event.value == -1:
+                                    self.button_pressed.emit("LEFT")
+                            elif event.code == ecodes.ABS_HAT0Y:
+                                if event.value == 1:
+                                    self.button_pressed.emit("DOWN")
+                                elif event.value == -1:
+                                    self.button_pressed.emit("UP")
+                else:
+                    time.sleep(5)  # Retry scanning for controller periodically
+            except Exception as e:
+                log_warning(f"Controller input listener error or device disconnected: {e}")
+                time.sleep(5)
+
+class ThemedMessageBox(QDialog):
+    def __init__(self, parent=None, title="", message="", theme_color="#DC143C"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setFixedSize(420, 180)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        card = QWidget(self)
+        card.setObjectName("msgCard")
+        card.setStyleSheet(f"""
+            QWidget#msgCard {{
+                background-color: rgba(22, 22, 22, 240);
+                border: 2px solid {theme_color};
+                border-radius: 14px;
+            }}
+        """)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(25, 25, 25, 25)
+        card_layout.setSpacing(15)
+
+        msg_label = QLabel(message, card)
+        msg_label.setWordWrap(True)
+        msg_label.setStyleSheet("color: #FFFFFF; font-size: 16px; font-weight: bold; background: transparent; border: none;")
+        card_layout.addWidget(msg_label)
+
+        card_layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+
+        self.yes_btn = QPushButton("Yes", card)
+        self.yes_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.yes_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {theme_color};
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px 20px;
+                border-radius: 8px;
+                border: none;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255, 255, 255, 30);
+                border: 1px solid {theme_color};
+            }}
+        """)
+        self.yes_btn.clicked.connect(self.accept)
+
+        self.no_btn = QPushButton("No", card)
+        self.no_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.no_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(45, 45, 45, 200);
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px 20px;
+                border-radius: 8px;
+                border: 1px solid rgba(255, 255, 255, 30);
+            }
+            QPushButton:hover {
+                background-color: rgba(65, 65, 65, 220);
+                border: 1px solid rgba(255, 255, 255, 60);
+            }
+        """)
+        self.no_btn.clicked.connect(self.reject)
+
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.no_btn)
+        btn_layout.addWidget(self.yes_btn)
+        card_layout.addLayout(btn_layout)
+
+        layout.addWidget(card)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.reject()
+        else:
+            super().keyPressEvent(event)
 
 class AnimatedLauncherButton(QToolButton):
     def __init__(self, parent=None, enable_animations=True, enable_glitch=False, theme_color="#DC143C"):
@@ -331,6 +469,27 @@ class MainApp(QWidget):
         self.initUI()
         self.start_ntp_sync_thread()
 
+        # Initialize Xbox controller monitoring thread if evdev is present
+        if EVDEV_AVAILABLE:
+            self.controller_thread = XboxControllerThread()
+            self.controller_thread.button_pressed.connect(self.handle_controller_input)
+            self.controller_thread.start()
+
+    def handle_controller_input(self, action):
+        if action in ("RIGHT", "DOWN"):
+            self.focusNextChild()
+        elif action in ("LEFT", "UP"):
+            self.focusPreviousChild()
+        elif action == "A":
+            focused = QApplication.focusWidget()
+            if isinstance(focused, (QPushButton, QToolButton, AnimatedLauncherButton)):
+                focused.click()
+        elif action == "B":
+            if hasattr(self, 'stacked_widget') and self.stacked_widget.currentWidget() == self.settings_page:
+                self.show_home_page()
+            else:
+                self.exit_launcher()
+
     def save_config_file(self):
         save_config(self.config)
 
@@ -476,11 +635,14 @@ class MainApp(QWidget):
         self.clock_timer.start(1000)
 
     def exit_launcher(self):
-        confirm = QMessageBox.question(
-            self, "Exit Launcher", "Are you sure you want to exit the launcher?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        theme_color = self.get_theme_color()
+        dialog = ThemedMessageBox(
+            self, 
+            title="Exit Launcher", 
+            message="Are you sure you want to exit the launcher?", 
+            theme_color=theme_color
         )
-        if confirm == QMessageBox.StandardButton.Yes:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             log_info("User initiated exit. Stopping background video and closing launcher.")
             if hasattr(self, 'video_timer'):
                 self.video_timer.stop()
@@ -489,11 +651,14 @@ class MainApp(QWidget):
             QApplication.quit()
 
     def trigger_sleep(self):
-        confirm = QMessageBox.question(
-            self, "Sleep System", "Are you sure you want to put the system to sleep?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        theme_color = self.get_theme_color()
+        dialog = ThemedMessageBox(
+            self, 
+            title="Sleep System", 
+            message="Are you sure you want to put the system to sleep?", 
+            theme_color=theme_color
         )
-        if confirm == QMessageBox.StandardButton.Yes:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             sleep_cmd = self.config.get("_sleep_command", "systemctl suspend")
             log_info(f"Executing system sleep command: '{sleep_cmd}'")
             try:
@@ -503,11 +668,14 @@ class MainApp(QWidget):
                 QMessageBox.critical(self, "Error", f"Failed to execute sleep command: {e}")
 
     def trigger_restart(self):
-        confirm = QMessageBox.question(
-            self, "Restart System", "Are you sure you want to restart the system?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        theme_color = self.get_theme_color()
+        dialog = ThemedMessageBox(
+            self, 
+            title="Restart System", 
+            message="Are you sure you want to restart the system?", 
+            theme_color=theme_color
         )
-        if confirm == QMessageBox.StandardButton.Yes:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             restart_cmd = self.config.get("_restart_command", "systemctl reboot")
             log_info(f"Executing system restart command: '{restart_cmd}'")
             try:
@@ -518,11 +686,14 @@ class MainApp(QWidget):
                 QMessageBox.critical(self, "Error", f"Failed to execute restart command: {e}")
 
     def trigger_shutdown(self):
-        confirm = QMessageBox.question(
-            self, "Shutdown System", "Are you sure you want to shut down the system?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        theme_color = self.get_theme_color()
+        dialog = ThemedMessageBox(
+            self, 
+            title="Shutdown System", 
+            message="Are you sure you want to shut down the system?", 
+            theme_color=theme_color
         )
-        if confirm == QMessageBox.StandardButton.Yes:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             power_cmd = self.config.get("_power_command", "systemctl poweroff")
             log_info(f"Executing system shutdown command: '{power_cmd}'")
             try:
