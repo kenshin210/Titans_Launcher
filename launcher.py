@@ -12,10 +12,21 @@ import cv2
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QLabel,
     QDialog, QFormLayout, QLineEdit, QCheckBox, QFileDialog, QListWidget,
-    QMessageBox, QTabWidget, QComboBox, QToolButton, QCompleter, QMenu
+    QMessageBox, QTabWidget, QComboBox, QToolButton, QCompleter, QMenu,
+    QStackedWidget, QGraphicsOpacityEffect
 )
-from PyQt6.QtCore import Qt, QUrl, QTimer, QSize, QPropertyAnimation, QEasingCurve, QRect, pyqtSignal
+from PyQt6.QtCore import (
+    Qt, QUrl, QTimer, QSize, QPropertyAnimation, QEasingCurve, QRect,
+    pyqtSignal, QPoint, QParallelAnimationGroup
+)
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction
+
+try:
+    from Settings.Logger import log_critical, log_error, log_warning, log_info, install_excepthook
+except ImportError:
+    from Logger import log_critical, log_error, log_warning, log_info, install_excepthook
+
+install_excepthook()
 
 CONFIG_PATH = Path.home() / ".config" / "Titans-launcher" / "profiles.json"
 DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
@@ -69,6 +80,7 @@ def load_config():
     if not CONFIG_PATH.exists():
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         save_config(DEFAULT_CONFIG)
+        log_info(f"Initialized default configuration at {CONFIG_PATH}")
         return DEFAULT_CONFIG
     try:
         with open(CONFIG_PATH, "r") as f:
@@ -108,14 +120,20 @@ def load_config():
                 if not k.startswith("_") and isinstance(v, dict):
                     if "arguments" not in v:
                         v["arguments"] = ""
+            log_info(f"Loaded configuration successfully from {CONFIG_PATH}")
             return data
-    except Exception:
+    except Exception as e:
+        log_error(f"Error parsing configuration file {CONFIG_PATH}: {e}", details=str(e))
         return DEFAULT_CONFIG
 
 def save_config(data):
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(data, f, indent=4)
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(data, f, indent=4)
+        log_info(f"Configuration saved to {CONFIG_PATH}")
+    except Exception as e:
+        log_error(f"Failed to save configuration: {e}", details=str(e))
 
 def fetch_ntp_time(server_address, offset_hours):
     import socket
@@ -133,9 +151,11 @@ def fetch_ntp_time(server_address, offset_hours):
             unix_time = unpacked - UNIX_EPOCH_DIFF
 
             dt_utc = datetime.fromtimestamp(unix_time, tz=timezone.utc)
-            return dt_utc.astimezone(timezone(timedelta(hours=offset_hours)))
-    except Exception:
-        pass
+            res = dt_utc.astimezone(timezone(timedelta(hours=offset_hours)))
+            log_info(f"NTP sync successful with {server_address}: {res.strftime('%Y-%m-%d %H:%M:%S')}")
+            return res
+    except Exception as e:
+        log_warning(f"NTP sync timed out/failed for {server_address}. Using system clock.", details=str(e))
 
     return datetime.now(timezone(timedelta(hours=offset_hours)))
 
@@ -270,6 +290,7 @@ class ApplicationEditorDialog(QDialog):
         cmd = self.cmd_input.text().strip()
         if cmd and (Path(cmd).is_absolute() or "/" in cmd or "\\" in cmd):
             if not Path(cmd).exists():
+                log_warning(f"ApplicationEditor: Executable does not exist on disk: '{cmd}'")
                 reply = QMessageBox.warning(
                     self,
                     "File Warning",
@@ -299,6 +320,7 @@ class MainApp(QWidget):
 
     def __init__(self):
         super().__init__()
+        log_info("Starting Titans HTPC Launcher...")
         self.config = load_config()
         self.cap = None
         self.current_ntp_time = datetime.now()
@@ -314,22 +336,35 @@ class MainApp(QWidget):
 
     def initUI(self):
         self.setWindowTitle("Application Launcher")
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.showFullScreen()
 
         self.bg_label = QLabel(self)
         self.bg_label.setGeometry(self.rect())
         self.bg_label.setScaledContents(True)
+        self.bg_label.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.bg_label.setStyleSheet("background-color: #141414;")
         self.bg_label.show()
 
         self.init_video_background()
 
         self.content_widget = QWidget(self)
+        self.content_widget.setObjectName("contentWidget")
         self.content_widget.setGeometry(self.rect())
-        self.content_widget.setStyleSheet("background-color: rgba(20, 20, 20, 160);")
+        self.content_widget.setStyleSheet("QWidget#contentWidget { background-color: rgba(20, 20, 20, 160); }")
         self.content_widget.show()
 
-        self.main_layout = QVBoxLayout(self.content_widget)
+        # Root layout for page stacking
+        root_layout = QVBoxLayout(self.content_widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.stacked_widget = QStackedWidget(self.content_widget)
+        root_layout.addWidget(self.stacked_widget)
+
+        # ================= PAGE 0: HOME LAUNCHER PAGE =================
+        self.home_page = QWidget()
+        self.home_page.setStyleSheet("background: transparent;")
+        self.main_layout = QVBoxLayout(self.home_page)
         self.main_layout.setContentsMargins(40, 40, 40, 40)
 
         top_layout = QHBoxLayout()
@@ -406,7 +441,7 @@ class MainApp(QWidget):
 
         self.config_btn = QPushButton("⚙ Settings")
         self.update_settings_button_style()
-        self.config_btn.clicked.connect(self.open_configurator)
+        self.config_btn.clicked.connect(self.show_settings_page)
         bottom_layout.addWidget(self.config_btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
         self.apps_layout = QHBoxLayout()
@@ -418,6 +453,22 @@ class MainApp(QWidget):
 
         self.main_layout.addStretch()
         self.main_layout.addLayout(bottom_layout)
+
+        # ================= PAGE 1: INTEGRATED SETTINGS PAGE =================
+        self.settings_page = QWidget()
+        self.settings_page.setStyleSheet("background: transparent;")
+        self.settings_page_layout = QVBoxLayout(self.settings_page)
+        self.settings_page_layout.setContentsMargins(40, 30, 40, 30)
+
+        # Container where Settings Widgets (Basic or Advanced) are mounted
+        self.settings_container = QVBoxLayout()
+        self.settings_container.setContentsMargins(0, 0, 0, 0)
+        self.settings_page_layout.addLayout(self.settings_container)
+
+        # Add pages to stack
+        self.stacked_widget.addWidget(self.home_page)
+        self.stacked_widget.addWidget(self.settings_page)
+
         self.content_widget.raise_()
 
         self.clock_timer = QTimer(self)
@@ -430,6 +481,7 @@ class MainApp(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if confirm == QMessageBox.StandardButton.Yes:
+            log_info("User initiated exit. Stopping background video and closing launcher.")
             if hasattr(self, 'video_timer'):
                 self.video_timer.stop()
             if self.cap:
@@ -443,9 +495,11 @@ class MainApp(QWidget):
         )
         if confirm == QMessageBox.StandardButton.Yes:
             sleep_cmd = self.config.get("_sleep_command", "systemctl suspend")
+            log_info(f"Executing system sleep command: '{sleep_cmd}'")
             try:
                 subprocess.Popen(sleep_cmd.split())
             except Exception as e:
+                log_error(f"Failed to execute sleep command '{sleep_cmd}': {e}", details=str(e))
                 QMessageBox.critical(self, "Error", f"Failed to execute sleep command: {e}")
 
     def trigger_restart(self):
@@ -455,10 +509,12 @@ class MainApp(QWidget):
         )
         if confirm == QMessageBox.StandardButton.Yes:
             restart_cmd = self.config.get("_restart_command", "systemctl reboot")
+            log_info(f"Executing system restart command: '{restart_cmd}'")
             try:
                 subprocess.Popen(restart_cmd.split())
                 self.close()
             except Exception as e:
+                log_error(f"Failed to execute restart command '{restart_cmd}': {e}", details=str(e))
                 QMessageBox.critical(self, "Error", f"Failed to execute restart command: {e}")
 
     def trigger_shutdown(self):
@@ -468,10 +524,12 @@ class MainApp(QWidget):
         )
         if confirm == QMessageBox.StandardButton.Yes:
             power_cmd = self.config.get("_power_command", "systemctl poweroff")
+            log_info(f"Executing system shutdown command: '{power_cmd}'")
             try:
                 subprocess.Popen(power_cmd.split())
                 self.close()
             except Exception as e:
+                log_error(f"Failed to execute power command '{power_cmd}': {e}", details=str(e))
                 QMessageBox.critical(self, "Error", f"Failed to execute power command: {e}")
 
     def update_power_button_display(self):
@@ -523,9 +581,30 @@ class MainApp(QWidget):
             return "50%"
         return "28px"
 
+    def update_back_button_style(self):
+        theme_color = self.get_theme_color()
+        if hasattr(self, 'back_btn'):
+            self.back_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: rgba(35, 35, 35, 160);
+                    color: #FFFFFF;
+                    font-size: 16px;
+                    font-weight: bold;
+                    padding: 10px 24px;
+                    border-radius: 12px;
+                    border: 2px solid rgba(255, 255, 255, 30);
+                }}
+                QPushButton:hover, QPushButton:focus {{
+                    color: #FFFFFF;
+                    background-color: rgba(60, 60, 60, 210);
+                    border: 2px solid {theme_color};
+                }}
+            """)
+
     def update_settings_button_style(self):
         theme_color = self.get_theme_color()
         border_radius = self.get_border_radius()
+        self.update_back_button_style()
 
         if hasattr(self, 'config_btn'):
             self.config_btn.setStyleSheet(f"""
@@ -579,9 +658,14 @@ class MainApp(QWidget):
         if video_path.exists():
             self.cap = cv2.VideoCapture(str(video_path))
             if self.cap.isOpened():
+                log_info(f"Background video opened successfully: {video_path}")
                 self.video_timer = QTimer(self)
                 self.video_timer.timeout.connect(self.update_video_frame)
                 self.video_timer.start(33)
+            else:
+                log_error(f"Failed to open background video file (codec or format error): {video_path}")
+        else:
+            log_warning(f"Background video file not found at: {video_path}")
 
     def update_video_frame(self):
         if self.cap and self.cap.isOpened():
@@ -682,12 +766,14 @@ class MainApp(QWidget):
         arguments_str = data.get("arguments", "").strip()
 
         if not executable:
+            log_warning("Launch cancelled: No executable or command specified for application.")
             QMessageBox.warning(self, "Missing Executable", "No executable or command specified for this application.")
             self.init_video_background()
             return
 
         if Path(executable).is_absolute() or "/" in executable or "\\" in executable:
             if not Path(executable).exists():
+                log_error(f"Application launch failed: Executable file not found on disk at '{executable}'")
                 QMessageBox.critical(
                     self,
                     "Application Not Found",
@@ -697,6 +783,7 @@ class MainApp(QWidget):
                 return
         else:
             if shutil.which(executable) is None:
+                log_error(f"Application launch failed: Command '{executable}' not found in system PATH or as executable file.")
                 QMessageBox.critical(
                     self,
                     "Command Not Found",
@@ -706,24 +793,31 @@ class MainApp(QWidget):
                 return
 
         if data.get("manage_antimicrox", False):
+            log_info("Managing AntiMicroX: Terminating existing antimicrox instances.")
             subprocess.run(["pkill", "-f", "antimicrox"])
 
             profile_path = data.get("profile", "")
             if profile_path and Path(profile_path).exists():
+                log_info(f"Applying AntiMicroX profile: {profile_path}")
                 subprocess.Popen([
                     "antimicrox",
                     "--profile", profile_path,
                     "--hidden",
                     "--eventgen", "uinput"
                 ])
+            elif profile_path:
+                log_warning(f"AntiMicroX profile specified but not found on disk: {profile_path}")
 
         cmd_list = [executable]
         if arguments_str:
             cmd_list.extend(shlex.split(arguments_str))
 
         try:
+            log_info(f"Spawning application process: {' '.join(cmd_list)}")
             proc = subprocess.Popen(cmd_list)
+            log_info(f"Application '{executable}' running (PID: {proc.pid})")
         except Exception as e:
+            log_critical(f"Failed to execute process '{executable}': {e}", details=str(e))
             QMessageBox.critical(self, "Launch Error", f"Failed to launch application:\n{e}")
             self.init_video_background()
             return
@@ -734,50 +828,339 @@ class MainApp(QWidget):
         # Monitor process completion in a background thread
         def wait_and_restore():
             proc.wait()
+            log_info(f"Application '{executable}' process exited with returncode {proc.returncode}")
             self.app_finished_signal.emit()
 
         threading.Thread(target=wait_and_restore, daemon=True).start()
 
     def on_app_finished(self):
         # Called safely on the GUI thread when the launched app exits
+        log_info("Restoring launcher interface after application exit.")
         self.showFullScreen()
         self.init_video_background()
 
+    def show_settings_page(self):
+        if getattr(self, 'is_animating', False):
+            return
+
+        log_info("Opening Settings view.")
+        enable_anim = self.config.get("_enable_animations", True)
+        if not enable_anim:
+            try:
+                self.build_settings_view(self.config.get("_advanced_mode", False))
+                self.stacked_widget.setCurrentWidget(self.settings_page)
+                if hasattr(self, 'current_settings_widget') and hasattr(self.current_settings_widget, 'focus_first_menu_item'):
+                    self.current_settings_widget.focus_first_menu_item()
+                elif hasattr(self, 'back_btn'):
+                    self.back_btn.setFocus()
+            except Exception as e:
+                import traceback
+                tb = traceback.format_exc()
+                log_critical(f"CRASH in show_settings_page: {e}", details=tb)
+                print(f"CRASH in show_settings_page: {e}")
+                traceback.print_exc()
+            return
+
+        self.animate_transition_to_settings()
+
+    def show_home_page(self):
+        if getattr(self, 'is_animating', False):
+            return
+
+        log_info("Returning to Home Launcher view.")
+        enable_anim = self.config.get("_enable_animations", True)
+        if not enable_anim:
+            self.stacked_widget.setCurrentWidget(self.home_page)
+            self.refresh_applications_view()
+            return
+
+        self.animate_transition_to_home()
+
+    def animate_transition_to_settings(self):
+        self.is_animating = True
+
+        home_widgets = []
+        if hasattr(self, 'title_label') and self.title_label.isVisible():
+            home_widgets.append(self.title_label)
+        if hasattr(self, 'power_btn') and self.power_btn.isVisible():
+            home_widgets.append(self.power_btn)
+
+        if hasattr(self, 'apps_layout'):
+            for i in range(self.apps_layout.count()):
+                item = self.apps_layout.itemAt(i)
+                if item and item.widget() and item.widget().isVisible():
+                    home_widgets.append(item.widget())
+
+        if hasattr(self, 'clock_label') and self.clock_label.isVisible():
+            home_widgets.append(self.clock_label)
+        if hasattr(self, 'config_btn') and self.config_btn.isVisible():
+            home_widgets.append(self.config_btn)
+
+        proxies = []
+        target_corner = QRect(0, self.content_widget.height(), 0, 0)
+        disintegrate_group = QParallelAnimationGroup(self)
+
+        for w in home_widgets:
+            pixmap = QPixmap(w.size())
+            pixmap.fill(Qt.GlobalColor.transparent)
+            w.render(pixmap)
+            if pixmap.isNull():
+                pixmap = w.grab()
+
+            global_pos = w.mapToGlobal(QPoint(0, 0))
+            local_pos = self.content_widget.mapFromGlobal(global_pos)
+            start_rect = QRect(local_pos.x(), local_pos.y(), w.width(), w.height())
+
+            proxy = QLabel(self.content_widget)
+            proxy.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            proxy.setStyleSheet("background: transparent; border: none;")
+            proxy.setPixmap(pixmap)
+            proxy.setScaledContents(True)
+            proxy.setGeometry(start_rect)
+            proxy.show()
+            proxy.raise_()
+
+            op_effect = QGraphicsOpacityEffect(proxy)
+            proxy.setGraphicsEffect(op_effect)
+
+            proxies.append(proxy)
+
+            anim_geom = QPropertyAnimation(proxy, b"geometry")
+            anim_geom.setDuration(330)
+            anim_geom.setStartValue(start_rect)
+            anim_geom.setEndValue(target_corner)
+            anim_geom.setEasingCurve(QEasingCurve.Type.InCubic)
+
+            anim_op = QPropertyAnimation(op_effect, b"opacity")
+            anim_op.setDuration(330)
+            anim_op.setStartValue(1.0)
+            anim_op.setEndValue(0.0)
+
+            disintegrate_group.addAnimation(anim_geom)
+            disintegrate_group.addAnimation(anim_op)
+
+        # Hide actual stacked widget so it never flashes during the transition
+        self.stacked_widget.setVisible(False)
+
+        # Build settings view behind the scenes
+        self.build_settings_view(self.config.get("_advanced_mode", False))
+
+        def on_disintegrate_done():
+            for p in proxies:
+                p.deleteLater()
+
+            def start_expand_settings():
+                corner_rect = QRect(0, self.content_widget.height(), 0, 0)
+                full_rect = QRect(0, 0, self.content_widget.width(), self.content_widget.height())
+
+                # Prepare settings page offscreen and render with transparent background
+                self.stacked_widget.setCurrentWidget(self.settings_page)
+                self.settings_page.resize(self.content_widget.size())
+                self.settings_page.ensurePolished()
+
+                settings_pixmap = QPixmap(self.content_widget.size())
+                settings_pixmap.fill(Qt.GlobalColor.transparent)
+                self.settings_page.render(settings_pixmap)
+
+                if settings_pixmap.isNull() or settings_pixmap.width() == 0:
+                    settings_pixmap = self.settings_page.grab()
+
+                settings_proxy = QLabel(self.content_widget)
+                settings_proxy.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                settings_proxy.setStyleSheet("background: transparent; border: none;")
+                settings_proxy.setPixmap(settings_pixmap)
+                settings_proxy.setScaledContents(True)
+                settings_proxy.setGeometry(corner_rect)
+                settings_proxy.show()
+                settings_proxy.raise_()
+
+                settings_op = QGraphicsOpacityEffect(settings_proxy)
+                settings_proxy.setGraphicsEffect(settings_op)
+                settings_op.setOpacity(0.0)
+
+                expand_group = QParallelAnimationGroup(self)
+
+                anim_s_geom = QPropertyAnimation(settings_proxy, b"geometry")
+                anim_s_geom.setDuration(360)
+                anim_s_geom.setStartValue(corner_rect)
+                anim_s_geom.setEndValue(full_rect)
+                anim_s_geom.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+                anim_s_op = QPropertyAnimation(settings_op, b"opacity")
+                anim_s_op.setDuration(360)
+                anim_s_op.setStartValue(0.0)
+                anim_s_op.setEndValue(1.0)
+
+                expand_group.addAnimation(anim_s_geom)
+                expand_group.addAnimation(anim_s_op)
+
+                def on_expand_done():
+                    self.stacked_widget.setVisible(True)
+                    self.settings_page.show()
+                    QTimer.singleShot(25, settings_proxy.deleteLater)
+                    self.is_animating = False
+                    if hasattr(self, 'current_settings_widget') and hasattr(self.current_settings_widget, 'focus_first_menu_item'):
+                        self.current_settings_widget.focus_first_menu_item()
+                    elif hasattr(self, 'back_btn'):
+                        self.back_btn.setFocus()
+
+                expand_group.finished.connect(on_expand_done)
+                self._active_anim = expand_group
+                expand_group.start()
+
+            # 0.25s pause with pure video background before settings menu expands
+            QTimer.singleShot(250, start_expand_settings)
+
+        disintegrate_group.finished.connect(on_disintegrate_done)
+        self._active_anim = disintegrate_group
+        disintegrate_group.start()
+
+    def animate_transition_to_home(self):
+        self.is_animating = True
+
+        full_rect = QRect(0, 0, self.content_widget.width(), self.content_widget.height())
+        corner_rect = QRect(0, self.content_widget.height(), 0, 0)
+
+        # Render settings page without capturing the video background
+        settings_pixmap = QPixmap(self.content_widget.size())
+        settings_pixmap.fill(Qt.GlobalColor.transparent)
+        self.settings_page.render(settings_pixmap)
+        if settings_pixmap.isNull():
+            settings_pixmap = self.settings_page.grab()
+
+        settings_proxy = QLabel(self.content_widget)
+        settings_proxy.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        settings_proxy.setStyleSheet("background: transparent; border: none;")
+        settings_proxy.setPixmap(settings_pixmap)
+        settings_proxy.setScaledContents(True)
+        settings_proxy.setGeometry(full_rect)
+        settings_proxy.show()
+        settings_proxy.raise_()
+
+        # Hide stacked widget so it cannot flash
+        self.stacked_widget.setVisible(False)
+
+        settings_op = QGraphicsOpacityEffect(settings_proxy)
+        settings_proxy.setGraphicsEffect(settings_op)
+
+        collapse_group = QParallelAnimationGroup(self)
+
+        anim_s_geom = QPropertyAnimation(settings_proxy, b"geometry")
+        anim_s_geom.setDuration(290)
+        anim_s_geom.setStartValue(full_rect)
+        anim_s_geom.setEndValue(corner_rect)
+        anim_s_geom.setEasingCurve(QEasingCurve.Type.InCubic)
+
+        anim_s_op = QPropertyAnimation(settings_op, b"opacity")
+        anim_s_op.setDuration(290)
+        anim_s_op.setStartValue(1.0)
+        anim_s_op.setEndValue(0.0)
+
+        collapse_group.addAnimation(anim_s_geom)
+        collapse_group.addAnimation(anim_s_op)
+
+        def on_collapse_done():
+            settings_proxy.deleteLater()
+
+            def start_restore_home():
+                # Prepare home page offscreen
+                self.refresh_applications_view()
+                self.stacked_widget.setCurrentWidget(self.home_page)
+                self.home_page.resize(self.content_widget.size())
+                self.home_page.ensurePolished()
+
+                home_pixmap = QPixmap(self.content_widget.size())
+                home_pixmap.fill(Qt.GlobalColor.transparent)
+                self.home_page.render(home_pixmap)
+
+                if home_pixmap.isNull() or home_pixmap.width() == 0:
+                    home_pixmap = self.home_page.grab()
+
+                home_proxy = QLabel(self.content_widget)
+                home_proxy.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                home_proxy.setStyleSheet("background: transparent; border: none;")
+                home_proxy.setPixmap(home_pixmap)
+                home_proxy.setScaledContents(True)
+                home_proxy.setGeometry(corner_rect)
+                home_proxy.show()
+                home_proxy.raise_()
+
+                home_op = QGraphicsOpacityEffect(home_proxy)
+                home_proxy.setGraphicsEffect(home_op)
+                home_op.setOpacity(0.0)
+
+                restore_group = QParallelAnimationGroup(self)
+
+                anim_geom = QPropertyAnimation(home_proxy, b"geometry")
+                anim_geom.setDuration(340)
+                anim_geom.setStartValue(corner_rect)
+                anim_geom.setEndValue(full_rect)
+                anim_geom.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+                anim_op = QPropertyAnimation(home_op, b"opacity")
+                anim_op.setDuration(340)
+                anim_op.setStartValue(0.0)
+                anim_op.setEndValue(1.0)
+
+                restore_group.addAnimation(anim_geom)
+                restore_group.addAnimation(anim_op)
+
+                def on_restore_done():
+                    self.stacked_widget.setVisible(True)
+                    self.home_page.show()
+                    QTimer.singleShot(25, home_proxy.deleteLater)
+                    self.is_animating = False
+
+                restore_group.finished.connect(on_restore_done)
+                self._active_anim = restore_group
+                restore_group.start()
+
+            # 0.25s pause with pure video background before launcher elements reappear
+            QTimer.singleShot(250, start_restore_home)
+
+        collapse_group.finished.connect(on_collapse_done)
+        self._active_anim = collapse_group
+        collapse_group.start()
+
     def open_configurator(self):
+        self.show_settings_page()
+
+    def build_settings_view(self, is_advanced):
+        while self.settings_container.count():
+            item = self.settings_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        def on_toggle_advanced(checked):
+            log_info(f"Toggled settings advanced mode: {checked}")
+            self.config["_advanced_mode"] = checked
+            self.save_config_file()
+            self.build_settings_view(checked)
+
         try:
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Settings")
-            dialog.resize(600, 640)
-            dialog.setStyleSheet("background-color: #1c1c1c; color: white;")
-
-            main_layout = QVBoxLayout(dialog)
-
-            def build_settings_view(is_advanced):
-                while main_layout.count():
-                    item = main_layout.takeAt(0)
-                    if item.widget():
-                        item.widget().deleteLater()
-
-                def on_toggle_advanced(checked):
-                    self.config["_advanced_mode"] = checked
-                    self.save_config_file()
-                    build_settings_view(checked)
-
-                if is_advanced:
-                    from Settings.Settings_Advanced import AdvancedSettingsWidget
-                    widget = AdvancedSettingsWidget(self, dialog, on_toggle_advanced)
-                else:
-                    from Settings.Settings_Basic import BasicSettingsWidget
-                    widget = BasicSettingsWidget(self, dialog, on_toggle_advanced)
-
-                main_layout.addWidget(widget)
-
-            build_settings_view(self.config.get("_advanced_mode", False))
-            dialog.exec()
+            if is_advanced:
+                from Settings.Settings_Advanced import AdvancedSettingsWidget
+                self.current_settings_widget = AdvancedSettingsWidget(self, self, on_toggle_advanced)
+            else:
+                from Settings.Settings_Basic import BasicSettingsWidget
+                self.current_settings_widget = BasicSettingsWidget(self, self, on_toggle_advanced)
         except Exception as e:
-            print(f"CRASH in open_configurator: {e}")
             import traceback
-            traceback.print_exc()
+            tb = traceback.format_exc()
+            log_critical(f"Failed to load {'Advanced' if is_advanced else 'Basic'} settings widget: {e}", details=tb)
+            raise
+
+        if hasattr(self.current_settings_widget, 'back_btn'):
+            self.back_btn = self.current_settings_widget.back_btn
+
+        self.settings_container.addWidget(self.current_settings_widget)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            if hasattr(self, 'stacked_widget') and self.stacked_widget.currentWidget() == self.settings_page:
+                self.show_home_page()
+                return
+        super().keyPressEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
