@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
+from datetime import datetime, timezone
 import json
 import threading
 from PyQt6.QtWidgets import (
@@ -1019,6 +1020,146 @@ class AdvancedSettingsWidget(QWidget):
         reload_logs()
 
         self.log_main_tabs.addTab(app_log_container, "Application Logs")
+
+        # --- SUB-PAGE 3: Operating System Logs ---
+        system_log_container = QWidget()
+        system_log_layout = QVBoxLayout(system_log_container)
+        system_log_layout.setContentsMargins(15, 15, 15, 15)
+        system_log_layout.setSpacing(12)
+
+        system_log_tabs = QTabWidget()
+        system_log_tabs.setStyleSheet(self.level_tabs.styleSheet())
+        system_log_views = {}
+        system_log_levels = [
+            ("Critical", "#FF4466"),
+            ("Error", "#FF6666"),
+            ("Warning", "#FFCC00"),
+            ("Information", "#00E5FF")
+        ]
+        for level_name, color_code in system_log_levels:
+            view = QTextEdit()
+            view.setReadOnly(True)
+            view.setStyleSheet(f"""
+                QTextEdit {{
+                    background-color: rgba(10, 10, 10, 245);
+                    color: {color_code};
+                    font-family: 'Consolas', 'Courier New', monospace;
+                    font-size: 13px;
+                    border: none;
+                    padding: 10px;
+                }}
+            """)
+            system_log_views[level_name] = view
+            system_log_tabs.addTab(view, level_name)
+
+        system_log_layout.addWidget(system_log_tabs)
+        system_log_status = QLabel("Showing the latest 1000 system journal entries.")
+        system_log_status.setStyleSheet("color: #888888; font-size: 13px;")
+        system_log_layout.addWidget(system_log_status)
+
+        refresh_system_logs_button = QPushButton("Refresh System Logs")
+        refresh_system_logs_button.setStyleSheet(f"background-color: {theme_color}; color: white; padding: 8px 16px; font-weight: bold; border-radius: 6px;")
+        system_log_layout.addWidget(refresh_system_logs_button, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        system_log_process = QProcess(self)
+        system_log_process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        system_log_output = bytearray()
+        system_log_error = bytearray()
+        system_log_request_finished = {"value": False}
+
+        def read_system_log_output():
+            system_log_output.extend(bytes(system_log_process.readAllStandardOutput()))
+
+        def read_system_log_error():
+            system_log_error.extend(bytes(system_log_process.readAllStandardError()))
+
+        def display_system_log_error(message):
+            for view in system_log_views.values():
+                view.setPlainText(message)
+
+        def finish_system_log_refresh(exit_code=None, error_message=None):
+            if system_log_request_finished["value"]:
+                return
+            system_log_request_finished["value"] = True
+            read_system_log_output()
+            read_system_log_error()
+            refresh_system_logs_button.setEnabled(True)
+
+            if error_message or exit_code != 0:
+                details = bytes(system_log_error).decode("utf-8", errors="replace").strip()
+                message = error_message or details or f"journalctl exited with status {exit_code}."
+                if "permission denied" in message.lower() or "not seeing messages" in message.lower():
+                    message += "\nAccess to system-wide logs may require systemd-journal group permissions."
+                display_system_log_error(message)
+                system_log_status.setText("Unable to read system logs.")
+                return
+
+            filtered_entries = {level_name: [] for level_name, _ in system_log_levels}
+            for line in bytes(system_log_output).splitlines():
+                try:
+                    entry = json.loads(line)
+                    priority = int(entry.get("PRIORITY", -1))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    continue
+
+                if priority <= 2:
+                    level_name = "Critical"
+                elif priority == 3:
+                    level_name = "Error"
+                elif priority == 4:
+                    level_name = "Warning"
+                elif priority in (5, 6):
+                    level_name = "Information"
+                else:
+                    continue
+
+                try:
+                    timestamp = datetime.fromtimestamp(
+                        int(entry.get("__REALTIME_TIMESTAMP", "0")) / 1_000_000,
+                        tz=timezone.utc
+                    ).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+                except (TypeError, ValueError, OSError):
+                    timestamp = "Unknown time"
+                source = entry.get("_SYSTEMD_UNIT") or entry.get("SYSLOG_IDENTIFIER") or entry.get("_COMM", "system")
+                message = str(entry.get("MESSAGE", ""))
+                filtered_entries[level_name].append(f"[{timestamp}] [{source}] {message}")
+
+            for level_name, view in system_log_views.items():
+                lines = filtered_entries[level_name]
+                view.setPlainText("\n".join(lines) if lines else f"No {level_name.lower()} system logs found.")
+                view.verticalScrollBar().setValue(view.verticalScrollBar().maximum())
+            system_log_status.setText("Showing the latest 1000 system journal entries.")
+
+        def refresh_system_logs():
+            if system_log_process.state() != QProcess.ProcessState.NotRunning:
+                return
+            system_log_output.clear()
+            system_log_error.clear()
+            system_log_request_finished["value"] = False
+            refresh_system_logs_button.setEnabled(False)
+            system_log_status.setText("Loading system logs...")
+            for view in system_log_views.values():
+                view.setPlainText("Loading system logs...")
+            system_log_process.setProgram("journalctl")
+            system_log_process.setArguments(["--no-pager", "--output=json", "-n", "1000"])
+            system_log_process.start()
+
+        system_log_process.readyReadStandardOutput.connect(read_system_log_output)
+        system_log_process.readyReadStandardError.connect(read_system_log_error)
+        system_log_process.finished.connect(
+            lambda exit_code, _status: finish_system_log_refresh(exit_code)
+        )
+        system_log_process.errorOccurred.connect(
+            lambda error: finish_system_log_refresh(error_message=system_log_process.errorString())
+            if error == QProcess.ProcessError.FailedToStart else None
+        )
+        refresh_system_logs_button.clicked.connect(refresh_system_logs)
+        system_log_timer = QTimer(self)
+        system_log_timer.timeout.connect(refresh_system_logs)
+        system_log_timer.start(15000)
+        refresh_system_logs()
+
+        self.log_main_tabs.addTab(system_log_container, "System Logs")
 
         layout.addWidget(self.log_main_tabs)
         return card
