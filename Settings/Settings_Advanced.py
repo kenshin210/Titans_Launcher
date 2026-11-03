@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import threading
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QCheckBox, QFileDialog, QMessageBox, QStackedWidget,
     QListWidget, QComboBox, QCompleter, QLabel, QScrollArea,
     QTextEdit, QTabWidget
@@ -191,6 +191,34 @@ class AdvancedSettingsWidget(QWidget):
                         border-left: 6px solid rgba(255, 255, 255, 80);
                     }
                 """)
+
+    def navigate_tabs(self, direction):
+        next_index = (self.pages.currentIndex() + direction) % len(self.nav_buttons)
+        self.nav_buttons[next_index].setFocus()
+        self.switch_tab(next_index)
+
+    def navigate_embedded_tabs(self, direction):
+        current_page = self.pages.currentWidget()
+        tab_widgets = [
+            tab_widget for tab_widget in current_page.findChildren(QTabWidget)
+            if tab_widget.isVisible() and tab_widget.count() > 1
+        ]
+        if not tab_widgets:
+            return False
+
+        focused_widget = QApplication.focusWidget()
+        target_tab = None
+        while focused_widget and focused_widget is not current_page:
+            if isinstance(focused_widget, QTabWidget) and focused_widget in tab_widgets:
+                target_tab = focused_widget
+                break
+            focused_widget = focused_widget.parentWidget()
+
+        if target_tab is None:
+            target_tab = tab_widgets[0]
+        target_index = (target_tab.currentIndex() + direction) % target_tab.count()
+        target_tab.setCurrentIndex(target_index)
+        return True
 
     def focus_first_menu_item(self):
         if self.nav_buttons:
