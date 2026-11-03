@@ -39,12 +39,14 @@ CONFIG_PATH = Path.home() / ".config" / "Titans-launcher" / "profiles.json"
 DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
 CONTROLLER_INPUTS_DIR = Path(__file__).resolve().parent / "Settings" / "Inputs"
 DEFAULT_CONTROLLER_BINDINGS = {
-    "up": "hat:up",
-    "down": "hat:down",
-    "left": "hat:left",
-    "right": "hat:right",
-    "select": "button:0",
-    "back": "button:1"
+    "up": ["hat:up", "axis:1:negative"],
+    "down": ["hat:down", "axis:1:positive"],
+    "left": ["hat:left", "axis:0:negative"],
+    "right": ["hat:right", "axis:0:positive"],
+    "select": ["button:0"],
+    "back": ["button:1"],
+    "previous_tab": ["button:4"],
+    "next_tab": ["button:5"]
 }
 
 # Default configuration generated on first run
@@ -191,16 +193,18 @@ class PygameControllerThread(QThread):
             return
 
         joysticks = {}
+        active_axes = {}
 
         while True:
             try:
                 if not pygame.joystick.get_init():
                     pygame.joystick.init()
                     joysticks.clear()
+                    active_axes.clear()
                     log_info("Reinitialized pygame joystick subsystem.")
 
                 pygame.event.pump()
-                
+
                 for i in range(pygame.joystick.get_count()):
                     if i not in joysticks:
                         js = pygame.joystick.Joystick(i)
@@ -221,6 +225,20 @@ class PygameControllerThread(QThread):
                             self.raw_input.emit("hat:up")
                         elif hat_y == -1:
                             self.raw_input.emit("hat:down")
+                    elif event.type == pygame.JOYAXISMOTION:
+                        axis_key = (event.joy, event.axis)
+                        if event.value <= -0.5:
+                            axis_input = f"axis:{event.axis}:negative"
+                        elif event.value >= 0.5:
+                            axis_input = f"axis:{event.axis}:positive"
+                        else:
+                            axis_input = None
+
+                        if axis_input and active_axes.get(axis_key) != axis_input:
+                            self.raw_input.emit(axis_input)
+                            active_axes[axis_key] = axis_input
+                        elif axis_input is None:
+                            active_axes.pop(axis_key, None)
 
                 time.sleep(0.03)
             except Exception as e:
@@ -280,7 +298,7 @@ class ThemedMessageBox(QDialog):
                 border-radius: 8px;
                 border: none;
             }}
-            QPushButton:hover {{
+            QPushButton:hover, QPushButton:focus {{
                 background-color: rgba(255, 255, 255, 30);
                 border: 1px solid {theme_color};
             }}
@@ -299,7 +317,7 @@ class ThemedMessageBox(QDialog):
                 border-radius: 8px;
                 border: 1px solid rgba(255, 255, 255, 30);
             }
-            QPushButton:hover {
+            QPushButton:hover, QPushButton:focus {
                 background-color: rgba(65, 65, 65, 220);
                 border: 1px solid rgba(255, 255, 255, 60);
             }
@@ -532,29 +550,120 @@ class MainApp(QWidget):
                 )
         except OSError as error:
             log_warning(f"Could not load controller profile {profile_path}; using default bindings.", details=str(error))
-        self.controller_bindings = {
-            input_name: action
-            for action, input_name in bindings.items()
-            if isinstance(action, str) and isinstance(input_name, str) and input_name
-        }
+        self.controller_bindings = {}
+        for action, input_names in bindings.items():
+            if not isinstance(action, str):
+                continue
+            if isinstance(input_names, str):
+                input_names = [input_names]
+                if action in ("up", "down", "left", "right"):
+                    default_axis_input = DEFAULT_CONTROLLER_BINDINGS[action][1]
+                    if default_axis_input not in input_names:
+                        input_names.append(default_axis_input)
+            if not isinstance(input_names, list):
+                continue
+            for input_name in input_names:
+                if isinstance(input_name, str) and input_name:
+                    self.controller_bindings[input_name] = action
 
     def handle_controller_input(self, input_name):
         if self.controller_capture_active:
             return
         action = self.controller_bindings.get(input_name)
+        if self.handle_power_menu_input(action):
+            return
+        if self.handle_confirmation_dialog_input(action):
+            return
         if action in ("right", "down"):
-            self.focusNextChild()
+            if action == "right" and self.stacked_widget.currentWidget() == self.settings_page:
+                settings_widget = getattr(self, "current_settings_widget", None)
+                if settings_widget:
+                    settings_widget.navigate_tabs(1)
+                else:
+                    self.focusNextChild()
+            else:
+                self.focusNextChild()
         elif action in ("left", "up"):
-            self.focusPreviousChild()
+            if action == "left" and self.stacked_widget.currentWidget() == self.settings_page:
+                settings_widget = getattr(self, "current_settings_widget", None)
+                if settings_widget:
+                    settings_widget.navigate_tabs(-1)
+                else:
+                    self.focusPreviousChild()
+            else:
+                self.focusPreviousChild()
+        elif action in ("previous_tab", "next_tab"):
+            settings_widget = getattr(self, "current_settings_widget", None)
+            if self.stacked_widget.currentWidget() == self.settings_page and settings_widget:
+                direction = -1 if action == "previous_tab" else 1
+                settings_widget.navigate_embedded_tabs(direction)
         elif action == "select":
             focused = QApplication.focusWidget()
             if isinstance(focused, (QPushButton, QToolButton, AnimatedLauncherButton)):
                 focused.click()
         elif action == "back":
-            if hasattr(self, 'stacked_widget') and self.stacked_widget.currentWidget() == self.settings_page:
+            modal_dialog = QApplication.activeModalWidget()
+            if modal_dialog:
+                modal_dialog.reject()
+            elif hasattr(self, 'stacked_widget') and self.stacked_widget.currentWidget() == self.settings_page:
                 self.show_home_page()
             else:
                 self.exit_launcher()
+
+    def handle_confirmation_dialog_input(self, action):
+        if action not in ("left", "right"):
+            return False
+
+        dialog = QApplication.activeModalWidget()
+        if dialog is None:
+            return False
+
+        if isinstance(dialog, ThemedMessageBox):
+            (dialog.no_btn if action == "left" else dialog.yes_btn).setFocus()
+            return True
+
+        if isinstance(dialog, QMessageBox):
+            no_button = dialog.button(QMessageBox.StandardButton.No)
+            yes_button = dialog.button(QMessageBox.StandardButton.Yes)
+            if no_button and yes_button:
+                (no_button if action == "left" else yes_button).setFocus()
+                return True
+
+            buttons = dialog.buttons()
+            if len(buttons) > 1:
+                current_button = QApplication.focusWidget()
+                current_index = buttons.index(current_button) if current_button in buttons else 0
+                direction = -1 if action == "left" else 1
+                buttons[(current_index + direction) % len(buttons)].setFocus()
+            return True
+
+        return True
+
+    def handle_power_menu_input(self, action):
+        if not self.power_menu.isVisible():
+            return False
+
+        available_actions = [
+            menu_action for menu_action in self.power_menu.actions()
+            if menu_action.isEnabled() and not menu_action.isSeparator()
+        ]
+        if not available_actions:
+            return True
+
+        if action in ("up", "left", "down", "right"):
+            current_action = self.power_menu.activeAction()
+            current_index = available_actions.index(current_action) if current_action in available_actions else 0
+            direction = -1 if action in ("up", "left") else 1
+            next_index = (current_index + direction) % len(available_actions)
+            self.power_menu.setActiveAction(available_actions[next_index])
+        elif action == "select":
+            selected_action = self.power_menu.activeAction()
+            if selected_action in available_actions:
+                self.power_menu.close()
+                selected_action.trigger()
+        elif action == "back":
+            self.power_menu.close()
+        return True
 
     def save_config_file(self):
         save_config(self.config)
@@ -634,6 +743,9 @@ class MainApp(QWidget):
         self.power_menu.addAction(action_sleep)
         self.power_menu.addAction(action_restart)
         self.power_menu.addAction(action_shutdown)
+        self.power_menu.aboutToShow.connect(
+            lambda: self.power_menu.setActiveAction(self.power_menu.actions()[0])
+        )
 
         self.power_btn.setMenu(self.power_menu)
         self.update_power_button_display()
@@ -700,9 +812,9 @@ class MainApp(QWidget):
     def exit_launcher(self):
         theme_color = self.get_theme_color()
         dialog = ThemedMessageBox(
-            self, 
-            title="Exit Launcher", 
-            message="Are you sure you want to exit the launcher?", 
+            self,
+            title="Exit Launcher",
+            message="Are you sure you want to exit the launcher?",
             theme_color=theme_color
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -716,9 +828,9 @@ class MainApp(QWidget):
     def trigger_sleep(self):
         theme_color = self.get_theme_color()
         dialog = ThemedMessageBox(
-            self, 
-            title="Sleep System", 
-            message="Are you sure you want to put the system to sleep?", 
+            self,
+            title="Sleep System",
+            message="Are you sure you want to put the system to sleep?",
             theme_color=theme_color
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -733,9 +845,9 @@ class MainApp(QWidget):
     def trigger_restart(self):
         theme_color = self.get_theme_color()
         dialog = ThemedMessageBox(
-            self, 
-            title="Restart System", 
-            message="Are you sure you want to restart the system?", 
+            self,
+            title="Restart System",
+            message="Are you sure you want to restart the system?",
             theme_color=theme_color
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -751,9 +863,9 @@ class MainApp(QWidget):
     def trigger_shutdown(self):
         theme_color = self.get_theme_color()
         dialog = ThemedMessageBox(
-            self, 
-            title="Shutdown System", 
-            message="Are you sure you want to shut down the system?", 
+            self,
+            title="Shutdown System",
+            message="Are you sure you want to shut down the system?",
             theme_color=theme_color
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
