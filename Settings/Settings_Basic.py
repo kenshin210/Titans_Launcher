@@ -184,6 +184,11 @@ class BasicSettingsWidget(QWidget):
                     }
                 """)
 
+    def navigate_tabs(self, direction):
+        next_index = (self.pages.currentIndex() + direction) % len(self.nav_buttons)
+        self.nav_buttons[next_index].setFocus()
+        self.switch_tab(next_index)
+
     def focus_first_menu_item(self):
         if self.nav_buttons:
             self.nav_buttons[0].setFocus()
