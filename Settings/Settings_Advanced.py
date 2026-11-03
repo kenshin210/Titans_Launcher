@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import threading
+from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QCheckBox, QFileDialog, QMessageBox, QStackedWidget,
@@ -67,10 +68,11 @@ class AdvancedSettingsWidget(QWidget):
             ("⚙  General", 0),
             ("🖼  Background", 1),
             ("🚀  Applications", 2),
-            ("🏷  App Icons", 3),
-            ("🎨  Theme & Power", 4),
-            ("🌐  NTP & Region", 5),
-            ("📋  Logging", 6)
+            ("🎮  Controllers", 3),
+            ("🏷  App Icons", 4),
+            ("🎨  Theme & Power", 5),
+            ("🌐  NTP & Region", 6),
+            ("📋  Logging", 7)
         ]
 
         for label, idx in categories:
@@ -81,29 +83,6 @@ class AdvancedSettingsWidget(QWidget):
             self.nav_buttons.append(btn)
 
         sidebar_layout.addStretch()
-
-        # Sidebar Toggle Button (switches back to Basic Menu)
-        self.mode_toggle_btn = QPushButton("Basic Menu")
-        self.mode_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mode_toggle_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: rgba(35, 35, 35, 170);
-                color: #FFFFFF;
-                font-size: 15px;
-                font-weight: bold;
-                padding: 14px 20px;
-                border-radius: 10px;
-                border: 2px solid rgba(255, 255, 255, 30);
-                text-align: center;
-            }}
-            QPushButton:hover, QPushButton:focus {{
-                color: #FFFFFF;
-                background-color: rgba(65, 65, 65, 220);
-                border: 2px solid {theme_color};
-            }}
-        """)
-        self.mode_toggle_btn.clicked.connect(self.handle_mode_toggle)
-        sidebar_layout.addWidget(self.mode_toggle_btn)
 
         # Bottom Left: Back to Launcher button
         self.back_btn = QPushButton("← Back to Launcher")
@@ -137,6 +116,7 @@ class AdvancedSettingsWidget(QWidget):
         self.pages.addWidget(self.create_general_page())
         self.pages.addWidget(self.create_background_page())
         self.pages.addWidget(self.create_apps_page())
+        self.pages.addWidget(self.create_controllers_page())
         self.pages.addWidget(self.create_icons_page())
         self.pages.addWidget(self.create_theme_page())
         self.pages.addWidget(self.create_ntp_page())
@@ -145,10 +125,6 @@ class AdvancedSettingsWidget(QWidget):
         root_layout.addWidget(self.pages, stretch=1)
 
         self.switch_tab(0)
-
-    def handle_mode_toggle(self):
-        if self.on_toggle_advanced:
-            self.on_toggle_advanced(False)
 
     def switch_tab(self, index):
         self.pages.setCurrentIndex(index)
@@ -211,9 +187,20 @@ class AdvancedSettingsWidget(QWidget):
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
-        desc = QLabel("Advanced mode is enabled. Use the sidebar button to switch back to the Basic Menu.")
+        desc = QLabel("Advanced mode is enabled. Uncheck to return to the simplified basic settings view.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
+
+        form = QFormLayout()
+        form.setVerticalSpacing(15)
+
+        self.advanced_cb = QCheckBox("Enable Advanced Settings")
+        self.advanced_cb.setStyleSheet("color: white; font-size: 16px; font-weight: bold; border: none;")
+        self.advanced_cb.setChecked(self.launcher.config.get("_advanced_mode", True))
+        self.advanced_cb.toggled.connect(self.on_toggle_advanced)
+
+        form.addRow(self.advanced_cb)
+        layout.addLayout(form)
         layout.addStretch()
         return card
 
@@ -390,7 +377,88 @@ class AdvancedSettingsWidget(QWidget):
         del_btn.clicked.connect(delete_application)
         return card
 
-    # --- TAB 4: App Icons & Power Icon ---
+    # --- TAB 4: Controllers ---
+    def create_controllers_page(self):
+        theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
+        card = QWidget()
+        card.setObjectName("settingsCard")
+        card.setStyleSheet("""
+            QWidget#settingsCard {
+                background-color: rgba(22, 22, 22, 200);
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 14px;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(35, 35, 35, 35)
+        layout.setSpacing(20)
+
+        title = QLabel("Controller Configuration")
+        title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
+        layout.addWidget(title)
+
+        desc = QLabel("Select the active controller device detected by the operating system.")
+        desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
+        layout.addWidget(desc)
+
+        form = QFormLayout()
+        form.setVerticalSpacing(15)
+
+        controller_combo = QComboBox()
+        controller_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
+
+        detected_devices = ["Auto-Detect (OS Default)"]
+        try:
+            import pygame
+            if not pygame.get_init():
+                pygame.init()
+            if not pygame.joystick.get_init():
+                pygame.joystick.init()
+            for i in range(pygame.joystick.get_count()):
+                js = pygame.joystick.Joystick(i)
+                detected_devices.append(js.get_name())
+        except Exception as e:
+            log_warning(f"Could not query joysticks for settings menu: {e}")
+
+        controller_combo.addItems(detected_devices)
+        saved_ctrl = self.launcher.config.get("_selected_controller", "Auto-Detect (OS Default)")
+        if saved_ctrl in detected_devices:
+            controller_combo.setCurrentText(saved_ctrl)
+
+        form.addRow(QLabel("Active Gamepad:"), controller_combo)
+
+        save_btn = QPushButton("Save Controller Setup")
+        save_btn.setStyleSheet(f"background-color: {theme_color}; color: white; padding: 12px 24px; font-weight: bold; border-radius: 8px; font-size: 15px;")
+
+        def save_controller_config():
+            selected = controller_combo.currentText()
+            self.launcher.config["_selected_controller"] = selected
+            self.launcher.save_config_file()
+
+            input_dir = Path("Settings") / "Input"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            
+            safe_name = "".join(c if c.isalnum() else "_" for c in selected)
+            file_path = input_dir / f"{safe_name}.json"
+            
+            payload = {
+                "device_name": selected,
+                "mapping_profile": "default_xbox_layout",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=4)
+
+            log_info(f"Advanced Settings: Controller config saved to {file_path}")
+            QMessageBox.information(self, "Success", f"Controller profile saved successfully to:\n{file_path}")
+
+        save_btn.clicked.connect(save_controller_config)
+        layout.addLayout(form)
+        layout.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addStretch()
+        return card
+
+    # --- TAB 5: App Icons & Power Icon ---
     def create_icons_page(self):
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         card = QWidget()
@@ -492,7 +560,7 @@ class AdvancedSettingsWidget(QWidget):
         layout.addStretch()
         return card
 
-    # --- TAB 5: Themes & Animation/Glitch/Power Customization ---
+    # --- TAB 6: Themes & Animation/Glitch/Power Customization ---
     def create_theme_page(self):
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
 
@@ -607,7 +675,7 @@ class AdvancedSettingsWidget(QWidget):
         scroll.setWidget(card)
         return scroll
 
-    # --- TAB 6: NTP & Region ---
+    # --- TAB 7: NTP & Region ---
     def create_ntp_page(self):
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         card = QWidget()
@@ -703,7 +771,7 @@ class AdvancedSettingsWidget(QWidget):
         layout.addStretch()
         return card
 
-    # --- TAB 7: Logging (with Terminal first, then Application Logs) ---
+    # --- TAB 8: Logging (Application Logging: Critical, Error, Warning, Information) ---
     def create_logging_page(self):
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         card = QWidget()
@@ -723,11 +791,11 @@ class AdvancedSettingsWidget(QWidget):
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
-        desc = QLabel("Test commands in the terminal or review real-time application diagnostics and launch operations.")
+        desc = QLabel("Review real-time application diagnostics, launch operations, warnings, and error logs.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
 
-        # Primary Sub-Tabs inside the Logging page: "Terminal" first, then "Application Logs"
+        # Primary Sub-Tab: Application Logging
         self.log_main_tabs = QTabWidget()
         self.log_main_tabs.setStyleSheet(f"""
             QTabWidget::pane {{
@@ -751,88 +819,12 @@ class AdvancedSettingsWidget(QWidget):
             }}
         """)
 
-        # --- SUB-PAGE 1: Embedded Terminal (Added First) ---
-        terminal_container = QWidget()
-        terminal_layout = QVBoxLayout(terminal_container)
-        terminal_layout.setContentsMargins(15, 15, 15, 15)
-        terminal_layout.setSpacing(10)
-
-        terminal_view = QTextEdit()
-        terminal_view.setReadOnly(True)
-        terminal_view.setStyleSheet("""
-            QTextEdit {
-                background-color: rgba(10, 10, 10, 245);
-                color: #00FF66;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 13px;
-                border: none;
-                padding: 10px;
-            }
-        """)
-        terminal_view.setPlainText("Titans Launcher Embedded Terminal initialized.\nType shell commands below and press Enter or click Run.\n\n")
-        terminal_layout.addWidget(terminal_view)
-
-        input_row = QHBoxLayout()
-        prompt_label = QLabel("❯")
-        prompt_label.setStyleSheet("color: #00FF66; font-weight: bold; font-size: 14px; background: transparent;")
-
-        cmd_input = QLineEdit()
-        cmd_input.setStyleSheet("""
-            QLineEdit {
-                background-color: rgba(30, 30, 30, 220);
-                color: white;
-                font-family: 'Consolas', 'Courier New', monospace;
-                padding: 8px;
-                font-size: 13px;
-                border: 1px solid rgba(255, 255, 255, 30);
-                border-radius: 6px;
-            }
-        """)
-        cmd_input.setPlaceholderText("Enter shell command (e.g., uname -a, ps aux)...")
-
-        run_btn = QPushButton("Run")
-        run_btn.setStyleSheet(f"background-color: {theme_color}; color: white; padding: 8px 18px; font-weight: bold; border-radius: 6px;")
-
-        input_row.addWidget(prompt_label)
-        input_row.addWidget(cmd_input)
-        input_row.addWidget(run_btn)
-        terminal_layout.addLayout(input_row)
-
-        def execute_command():
-            cmd = cmd_input.text().strip()
-            if not cmd:
-                return
-            terminal_view.append(f"❯ {cmd}")
-            cmd_input.clear()
-
-            def run_async():
-                try:
-                    import subprocess
-                    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-                    output = res.stdout if res.returncode == 0 else (res.stdout + res.stderr)
-                    if not output.strip():
-                        output = "[Command executed successfully with no output]"
-                    terminal_view.append(output + "\n")
-                    logger.debug(f"Terminal Command: {cmd}", details=output[:300])
-                except Exception as e:
-                    err_msg = f"Execution error: {e}"
-                    terminal_view.append(err_msg + "\n")
-                    logger.error(err_msg)
-
-            import threading
-            threading.Thread(target=run_async, daemon=True).start()
-
-        run_btn.clicked.connect(execute_command)
-        cmd_input.returnPressed.connect(execute_command)
-
-        self.log_main_tabs.addTab(terminal_container, "Terminal")
-
-        # --- SUB-PAGE 2: Application Logging (Added Second) ---
         app_log_container = QWidget()
         app_log_layout = QVBoxLayout(app_log_container)
         app_log_layout.setContentsMargins(15, 15, 15, 15)
         app_log_layout.setSpacing(12)
 
+        # Category Sub-Tabs: Critical, Error, Warning, Information
         self.level_tabs = QTabWidget()
         self.level_tabs.setStyleSheet("""
             QTabWidget::pane {
@@ -861,8 +853,7 @@ class AdvancedSettingsWidget(QWidget):
             ("Critical", "🔴 Critical", "#FF4466"),
             ("Error", "❌ Error", "#FF6666"),
             ("Warning", "⚠️ Warning", "#FFCC00"),
-            ("Information", "ℹ️ Information", "#00E5FF"),
-            ("Debug", "🐞 Debug", "#BB86FC")
+            ("Information", "ℹ️ Information", "#00E5FF")
         ]
 
         for level_key, level_label, color_code in levels:
@@ -953,7 +944,6 @@ class AdvancedSettingsWidget(QWidget):
         logger.add_listener(on_log_emitted)
         reload_logs()
 
-        self.log_main_tabs.addTab(app_log_container, "Application Logs")
-
+        self.log_main_tabs.addTab(app_log_container, "Application Logging")
         layout.addWidget(self.log_main_tabs)
         return card
