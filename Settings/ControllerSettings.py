@@ -10,12 +10,14 @@ from PyQt6.QtWidgets import (
 
 INPUTS_DIR = Path(__file__).resolve().parent / "Inputs"
 DEFAULT_BINDINGS = {
-    "up": "hat:up",
-    "down": "hat:down",
-    "left": "hat:left",
-    "right": "hat:right",
-    "select": "button:0",
-    "back": "button:1"
+    "up": ["hat:up", "axis:1:negative"],
+    "down": ["hat:down", "axis:1:positive"],
+    "left": ["hat:left", "axis:0:negative"],
+    "right": ["hat:right", "axis:0:positive"],
+    "select": ["button:0"],
+    "back": ["button:1"],
+    "previous_tab": ["button:4"],
+    "next_tab": ["button:5"]
 }
 
 
@@ -37,7 +39,7 @@ class ControllerSettingsWidget(QWidget):
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold;")
         layout.addWidget(title)
 
-        description = QLabel("Choose a controller profile and bind launcher actions to its buttons or D-pad.")
+        description = QLabel("Choose a controller profile and bind buttons, D-pad, sticks, or bumpers to launcher actions.")
         description.setWordWrap(True)
         description.setStyleSheet("color: #888888; font-size: 14px;")
         layout.addWidget(description)
@@ -56,6 +58,7 @@ class ControllerSettingsWidget(QWidget):
         self.bindings_form = QFormLayout()
         self.bindings_form.setVerticalSpacing(12)
         layout.addLayout(self.bindings_form)
+        self.clear_buttons = {}
 
         self.status_label = QLabel()
         self.status_label.setStyleSheet("color: #AAAAAA; font-size: 13px;")
@@ -66,17 +69,26 @@ class ControllerSettingsWidget(QWidget):
         layout.addWidget(save_button, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addStretch()
 
-        for action in ("up", "down", "left", "right", "select", "back"):
+        action_labels = {
+            "previous_tab": "Left Bumper (Previous Tab)",
+            "next_tab": "Right Bumper (Next Tab)"
+        }
+        for action in DEFAULT_BINDINGS:
             row = QHBoxLayout()
             value_label = QLabel()
             value_label.setStyleSheet("color: white; font-size: 14px;")
-            bind_button = QPushButton("Bind")
+            bind_button = QPushButton("Add Binding")
             bind_button.clicked.connect(lambda checked=False, name=action: self.capture_binding(name))
+            clear_button = QPushButton("Clear")
+            clear_button.clicked.connect(lambda checked=False, name=action: self.clear_bindings(name))
             row.addWidget(value_label, stretch=1)
             row.addWidget(bind_button)
-            self.bindings_form.addRow(f"{action.title()}:", row)
+            row.addWidget(clear_button)
+            label = action_labels.get(action, action.title())
+            self.bindings_form.addRow(f"{label}:", row)
             self.binding_labels[action] = value_label
             self.bind_buttons[action] = bind_button
+            self.clear_buttons[action] = clear_button
 
         self.refresh_profiles()
 
@@ -120,15 +132,38 @@ class ControllerSettingsWidget(QWidget):
             self.profile_data = {"name": Path(profile_path).stem, "bindings": {}}
         if not isinstance(self.profile_data.get("bindings"), dict):
             self.profile_data["bindings"] = {}
-        self.profile_data["bindings"] = {
-            **DEFAULT_BINDINGS,
-            **self.profile_data["bindings"]
-        }
+        stored_bindings = self.profile_data["bindings"]
+        normalized_bindings = {}
+        for action, default_inputs in DEFAULT_BINDINGS.items():
+            inputs = stored_bindings.get(action, default_inputs)
+            if isinstance(inputs, str):
+                inputs = [inputs]
+                if action in ("up", "down", "left", "right"):
+                    default_axis_input = default_inputs[1]
+                    if default_axis_input not in inputs:
+                        inputs.append(default_axis_input)
+            if not isinstance(inputs, list):
+                inputs = default_inputs
+            normalized_bindings[action] = [
+                input_name for input_name in inputs
+                if isinstance(input_name, str) and input_name
+            ]
+        for action, inputs in stored_bindings.items():
+            if action not in normalized_bindings:
+                if isinstance(inputs, str):
+                    inputs = [inputs]
+                if isinstance(inputs, list):
+                    normalized_bindings[action] = [
+                        input_name for input_name in inputs
+                        if isinstance(input_name, str) and input_name
+                    ]
+        self.profile_data["bindings"] = normalized_bindings
         self.update_binding_labels()
 
     def update_binding_labels(self):
         for action, label in self.binding_labels.items():
-            label.setText(self.profile_data.get("bindings", {}).get(action) or "Not assigned")
+            bindings = self.profile_data.get("bindings", {}).get(action, [])
+            label.setText(" | ".join(bindings) if bindings else "Not assigned")
 
     def capture_binding(self, action):
         if self._capture_slot:
@@ -145,14 +180,20 @@ class ControllerSettingsWidget(QWidget):
         self._capture_action = action
         self._capture_slot = self.handle_captured_input
         controller_thread.raw_input.connect(self._capture_slot)
-        self.status_label.setText(f"Press a controller input for {action}.")
+        self.status_label.setText(f"Press a button or D-pad direction, or move a stick for {action}.")
 
     @pyqtSlot(str)
     def handle_captured_input(self, input_name):
         if self._capture_action is None:
             return
-        self.profile_data["bindings"][self._capture_action] = input_name
+        bindings = self.profile_data["bindings"].setdefault(self._capture_action, [])
+        if input_name not in bindings:
+            bindings.append(input_name)
         self.stop_capture()
+        self.update_binding_labels()
+
+    def clear_bindings(self, action):
+        self.profile_data["bindings"][action] = []
         self.update_binding_labels()
 
     def stop_capture(self):
