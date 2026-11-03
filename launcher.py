@@ -182,14 +182,11 @@ class PygameControllerThread(QThread):
             return
 
         joysticks = {}
-        last_dpad_state = {}
 
         while True:
             try:
-                # Handle hot-plugging / connecting joysticks
                 pygame.event.pump()
                 
-                # Check for newly connected joysticks
                 for i in range(pygame.joystick.get_count()):
                     if i not in joysticks:
                         js = pygame.joystick.Joystick(i)
@@ -197,16 +194,13 @@ class PygameControllerThread(QThread):
                         joysticks[i] = js
                         log_info(f"Pygame-ce detected controller: {js.get_name()} (ID: {i})")
 
-                # Poll events from active joysticks
                 for event in pygame.event.get():
                     if event.type == pygame.JOYBUTTONDOWN:
-                        # Standard Xbox layout mapping: Button 0 = A, Button 1 = B
                         if event.button == 0:
                             self.button_pressed.emit("A")
                         elif event.button == 1:
                             self.button_pressed.emit("B")
                     elif event.type == pygame.JOYHATMOTION:
-                        # D-Pad (Hat 0) motion: (x, y)
                         hat_x, hat_y = event.value
                         if hat_x == 1:
                             self.button_pressed.emit("RIGHT")
@@ -217,7 +211,7 @@ class PygameControllerThread(QThread):
                         elif hat_y == -1:
                             self.button_pressed.emit("DOWN")
 
-                time.sleep(0.03) # ~30fps polling loop to save CPU
+                time.sleep(0.03)
             except Exception as e:
                 log_warning(f"Pygame controller polling error: {e}")
                 time.sleep(2)
@@ -463,7 +457,6 @@ class ApplicationEditorDialog(QDialog):
         )
 
 class MainApp(QWidget):
-    # Custom signal to safely pop the launcher back up from a background thread
     app_finished_signal = pyqtSignal()
 
     def __init__(self):
@@ -473,13 +466,11 @@ class MainApp(QWidget):
         self.cap = None
         self.current_ntp_time = datetime.now()
 
-        # Connect the process finish signal to the handler method
         self.app_finished_signal.connect(self.on_app_finished)
 
         self.initUI()
         self.start_ntp_sync_thread()
 
-        # Initialize Pygame-ce controller monitoring thread
         if PYGAME_AVAILABLE:
             self.controller_thread = PygameControllerThread()
             self.controller_thread.button_pressed.connect(self.handle_controller_input)
@@ -523,7 +514,6 @@ class MainApp(QWidget):
         self.content_widget.setStyleSheet("QWidget#contentWidget { background-color: rgba(20, 20, 20, 160); }")
         self.content_widget.show()
 
-        # Root layout for page stacking
         root_layout = QVBoxLayout(self.content_widget)
         root_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -629,12 +619,10 @@ class MainApp(QWidget):
         self.settings_page_layout = QVBoxLayout(self.settings_page)
         self.settings_page_layout.setContentsMargins(40, 30, 40, 30)
 
-        # Container where Settings Widgets (Basic or Advanced) are mounted
         self.settings_container = QVBoxLayout()
         self.settings_container.setContentsMargins(0, 0, 0, 0)
         self.settings_page_layout.addLayout(self.settings_container)
 
-        # Add pages to stack
         self.stacked_widget.addWidget(self.home_page)
         self.stacked_widget.addWidget(self.settings_page)
 
@@ -1003,10 +991,8 @@ class MainApp(QWidget):
             self.init_video_background()
             return
 
-        # Hide the launcher instead of closing it
         self.hide()
 
-        # Monitor process completion in a background thread
         def wait_and_restore():
             proc.wait()
             log_info(f"Application '{executable}' process exited with returncode {proc.returncode}")
@@ -1015,7 +1001,6 @@ class MainApp(QWidget):
         threading.Thread(target=wait_and_restore, daemon=True).start()
 
     def on_app_finished(self):
-        # Called safely on the GUI thread when the launched app exits
         log_info("Restoring launcher interface after application exit.")
         self.showFullScreen()
         self.init_video_background()
@@ -1038,7 +1023,6 @@ class MainApp(QWidget):
                 import traceback
                 tb = traceback.format_exc()
                 log_critical(f"CRASH in show_settings_page: {e}", details=tb)
-                print(f"CRASH in show_settings_page: {e}")
                 traceback.print_exc()
             return
 
@@ -1120,10 +1104,7 @@ class MainApp(QWidget):
             disintegrate_group.addAnimation(anim_geom)
             disintegrate_group.addAnimation(anim_op)
 
-        # Hide actual stacked widget so it never flashes during the transition
         self.stacked_widget.setVisible(False)
-
-        # Build settings view behind the scenes
         self.build_settings_view(self.config.get("_advanced_mode", False))
 
         def on_disintegrate_done():
@@ -1134,7 +1115,6 @@ class MainApp(QWidget):
                 corner_rect = QRect(0, self.content_widget.height(), 0, 0)
                 full_rect = QRect(0, 0, self.content_widget.width(), self.content_widget.height())
 
-                # Prepare settings page offscreen and render with transparent background
                 self.stacked_widget.setCurrentWidget(self.settings_page)
                 self.settings_page.resize(self.content_widget.size())
                 self.settings_page.ensurePolished()
@@ -1189,7 +1169,6 @@ class MainApp(QWidget):
                 self._active_anim = expand_group
                 expand_group.start()
 
-            # 0.25s pause with pure video background before settings menu expands
             QTimer.singleShot(250, start_expand_settings)
 
         disintegrate_group.finished.connect(on_disintegrate_done)
@@ -1202,7 +1181,6 @@ class MainApp(QWidget):
         full_rect = QRect(0, 0, self.content_widget.width(), self.content_widget.height())
         corner_rect = QRect(0, self.content_widget.height(), 0, 0)
 
-        # Render settings page without capturing the video background
         settings_pixmap = QPixmap(self.content_widget.size())
         settings_pixmap.fill(Qt.GlobalColor.transparent)
         self.settings_page.render(settings_pixmap)
@@ -1218,7 +1196,6 @@ class MainApp(QWidget):
         settings_proxy.show()
         settings_proxy.raise_()
 
-        # Hide stacked widget so it cannot flash
         self.stacked_widget.setVisible(False)
 
         settings_op = QGraphicsOpacityEffect(settings_proxy)
@@ -1244,7 +1221,6 @@ class MainApp(QWidget):
             settings_proxy.deleteLater()
 
             def start_restore_home():
-                # Prepare home page offscreen
                 self.refresh_applications_view()
                 self.stacked_widget.setCurrentWidget(self.home_page)
                 self.home_page.resize(self.content_widget.size())
@@ -1296,7 +1272,6 @@ class MainApp(QWidget):
                 self._active_anim = restore_group
                 restore_group.start()
 
-            # 0.25s pause with pure video background before launcher elements reappear
             QTimer.singleShot(250, start_restore_home)
 
         collapse_group.finished.connect(on_collapse_done)
