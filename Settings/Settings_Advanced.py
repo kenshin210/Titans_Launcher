@@ -148,7 +148,6 @@ class AdvancedSettingsWidget(QWidget):
 
     def handle_mode_toggle(self):
         if self.on_toggle_advanced:
-            # Currently in Advanced, switch back to Basic (False)
             self.on_toggle_advanced(False)
 
     def switch_tab(self, index):
@@ -704,7 +703,7 @@ class AdvancedSettingsWidget(QWidget):
         layout.addStretch()
         return card
 
-    # --- TAB 7: Logging (Application Logging: Critical, Error, Warning, Information) ---
+    # --- TAB 7: Logging (with Terminal first, then Application Logs) ---
     def create_logging_page(self):
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         card = QWidget()
@@ -724,11 +723,11 @@ class AdvancedSettingsWidget(QWidget):
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
-        desc = QLabel("Review real-time application diagnostics, launch operations, warnings, and error logs.")
+        desc = QLabel("Test commands in the terminal or review real-time application diagnostics and launch operations.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
 
-        # Primary Sub-Tab: Application Logging
+        # Primary Sub-Tabs inside the Logging page: "Terminal" first, then "Application Logs"
         self.log_main_tabs = QTabWidget()
         self.log_main_tabs.setStyleSheet(f"""
             QTabWidget::pane {{
@@ -752,12 +751,88 @@ class AdvancedSettingsWidget(QWidget):
             }}
         """)
 
+        # --- SUB-PAGE 1: Embedded Terminal (Added First) ---
+        terminal_container = QWidget()
+        terminal_layout = QVBoxLayout(terminal_container)
+        terminal_layout.setContentsMargins(15, 15, 15, 15)
+        terminal_layout.setSpacing(10)
+
+        terminal_view = QTextEdit()
+        terminal_view.setReadOnly(True)
+        terminal_view.setStyleSheet("""
+            QTextEdit {
+                background-color: rgba(10, 10, 10, 245);
+                color: #00FF66;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 13px;
+                border: none;
+                padding: 10px;
+            }
+        """)
+        terminal_view.setPlainText("Titans Launcher Embedded Terminal initialized.\nType shell commands below and press Enter or click Run.\n\n")
+        terminal_layout.addWidget(terminal_view)
+
+        input_row = QHBoxLayout()
+        prompt_label = QLabel("❯")
+        prompt_label.setStyleSheet("color: #00FF66; font-weight: bold; font-size: 14px; background: transparent;")
+
+        cmd_input = QLineEdit()
+        cmd_input.setStyleSheet("""
+            QLineEdit {
+                background-color: rgba(30, 30, 30, 220);
+                color: white;
+                font-family: 'Consolas', 'Courier New', monospace;
+                padding: 8px;
+                font-size: 13px;
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 6px;
+            }
+        """)
+        cmd_input.setPlaceholderText("Enter shell command (e.g., uname -a, ps aux)...")
+
+        run_btn = QPushButton("Run")
+        run_btn.setStyleSheet(f"background-color: {theme_color}; color: white; padding: 8px 18px; font-weight: bold; border-radius: 6px;")
+
+        input_row.addWidget(prompt_label)
+        input_row.addWidget(cmd_input)
+        input_row.addWidget(run_btn)
+        terminal_layout.addLayout(input_row)
+
+        def execute_command():
+            cmd = cmd_input.text().strip()
+            if not cmd:
+                return
+            terminal_view.append(f"❯ {cmd}")
+            cmd_input.clear()
+
+            def run_async():
+                try:
+                    import subprocess
+                    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+                    output = res.stdout if res.returncode == 0 else (res.stdout + res.stderr)
+                    if not output.strip():
+                        output = "[Command executed successfully with no output]"
+                    terminal_view.append(output + "\n")
+                    logger.debug(f"Terminal Command: {cmd}", details=output[:300])
+                except Exception as e:
+                    err_msg = f"Execution error: {e}"
+                    terminal_view.append(err_msg + "\n")
+                    logger.error(err_msg)
+
+            import threading
+            threading.Thread(target=run_async, daemon=True).start()
+
+        run_btn.clicked.connect(execute_command)
+        cmd_input.returnPressed.connect(execute_command)
+
+        self.log_main_tabs.addTab(terminal_container, "Terminal")
+
+        # --- SUB-PAGE 2: Application Logging (Added Second) ---
         app_log_container = QWidget()
         app_log_layout = QVBoxLayout(app_log_container)
         app_log_layout.setContentsMargins(15, 15, 15, 15)
         app_log_layout.setSpacing(12)
 
-        # Category Sub-Tabs: Critical, Error, Warning, Information
         self.level_tabs = QTabWidget()
         self.level_tabs.setStyleSheet("""
             QTabWidget::pane {
@@ -786,7 +861,8 @@ class AdvancedSettingsWidget(QWidget):
             ("Critical", "🔴 Critical", "#FF4466"),
             ("Error", "❌ Error", "#FF6666"),
             ("Warning", "⚠️ Warning", "#FFCC00"),
-            ("Information", "ℹ️ Information", "#00E5FF")
+            ("Information", "ℹ️ Information", "#00E5FF"),
+            ("Debug", "🐞 Debug", "#BB86FC")
         ]
 
         for level_key, level_label, color_code in levels:
@@ -877,6 +953,7 @@ class AdvancedSettingsWidget(QWidget):
         logger.add_listener(on_log_emitted)
         reload_logs()
 
-        self.log_main_tabs.addTab(app_log_container, "Application Logging")
+        self.log_main_tabs.addTab(app_log_container, "Application Logs")
+
         layout.addWidget(self.log_main_tabs)
         return card
