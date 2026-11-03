@@ -1,0 +1,201 @@
+import json
+import re
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, pyqtSlot
+from PyQt6.QtWidgets import (
+    QComboBox, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QInputDialog, QVBoxLayout, QWidget
+)
+
+INPUTS_DIR = Path(__file__).resolve().parent / "Inputs"
+DEFAULT_BINDINGS = {
+    "up": "hat:up",
+    "down": "hat:down",
+    "left": "hat:left",
+    "right": "hat:right",
+    "select": "button:0",
+    "back": "button:1"
+}
+
+
+class ControllerSettingsWidget(QWidget):
+    def __init__(self, launcher):
+        super().__init__()
+        self.launcher = launcher
+        self.profile_data = {}
+        self.binding_labels = {}
+        self.bind_buttons = {}
+        self._capture_slot = None
+        self._capture_action = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(35, 35, 35, 35)
+        layout.setSpacing(18)
+
+        title = QLabel("Controller")
+        title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold;")
+        layout.addWidget(title)
+
+        description = QLabel("Choose a controller profile and bind launcher actions to its buttons or D-pad.")
+        description.setWordWrap(True)
+        description.setStyleSheet("color: #888888; font-size: 14px;")
+        layout.addWidget(description)
+
+        self.profile_combo = QComboBox()
+        self.profile_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px;")
+        self.profile_combo.currentIndexChanged.connect(self.load_selected_profile)
+
+        add_profile_button = QPushButton("Add Profile")
+        add_profile_button.clicked.connect(self.add_profile)
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(self.profile_combo, stretch=1)
+        profile_row.addWidget(add_profile_button)
+        layout.addLayout(profile_row)
+
+        self.bindings_form = QFormLayout()
+        self.bindings_form.setVerticalSpacing(12)
+        layout.addLayout(self.bindings_form)
+
+        self.status_label = QLabel()
+        self.status_label.setStyleSheet("color: #AAAAAA; font-size: 13px;")
+        layout.addWidget(self.status_label)
+
+        save_button = QPushButton("Save Controller Profile")
+        save_button.clicked.connect(self.save_profile)
+        layout.addWidget(save_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addStretch()
+
+        for action in ("up", "down", "left", "right", "select", "back"):
+            row = QHBoxLayout()
+            value_label = QLabel()
+            value_label.setStyleSheet("color: white; font-size: 14px;")
+            bind_button = QPushButton("Bind")
+            bind_button.clicked.connect(lambda checked=False, name=action: self.capture_binding(name))
+            row.addWidget(value_label, stretch=1)
+            row.addWidget(bind_button)
+            self.bindings_form.addRow(f"{action.title()}:", row)
+            self.binding_labels[action] = value_label
+            self.bind_buttons[action] = bind_button
+
+        self.refresh_profiles()
+
+    def refresh_profiles(self, selected_name=None):
+        INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        paths = sorted(INPUTS_DIR.glob("*.json"))
+        if not paths:
+            default_path = INPUTS_DIR / "Xbox Controller.json"
+            default_path.write_text(json.dumps({"name": "Xbox Controller", "bindings": DEFAULT_BINDINGS}, indent=4) + "\n")
+            paths = [default_path]
+
+        for path in paths:
+            label = path.stem
+            try:
+                with path.open("r", encoding="utf-8") as profile_file:
+                    label = json.load(profile_file).get("name", label)
+            except (OSError, json.JSONDecodeError, AttributeError):
+                pass
+            self.profile_combo.addItem(label, str(path))
+
+        preferred = selected_name or self.launcher.config.get("_controller_profile", "Xbox Controller.json")
+        index = next((i for i in range(self.profile_combo.count())
+                      if Path(self.profile_combo.itemData(i)).name == Path(preferred).name), 0)
+        self.profile_combo.setCurrentIndex(index)
+        self.profile_combo.blockSignals(False)
+        self.load_selected_profile()
+
+    def load_selected_profile(self, _index=None):
+        self.stop_capture()
+        profile_path = self.profile_combo.currentData()
+        if not profile_path:
+            return
+        try:
+            with open(profile_path, "r", encoding="utf-8") as profile_file:
+                self.profile_data = json.load(profile_file)
+        except (OSError, json.JSONDecodeError):
+            self.profile_data = {"name": Path(profile_path).stem, "bindings": {}}
+        if not isinstance(self.profile_data, dict):
+            self.profile_data = {"name": Path(profile_path).stem, "bindings": {}}
+        if not isinstance(self.profile_data.get("bindings"), dict):
+            self.profile_data["bindings"] = {}
+        self.profile_data["bindings"] = {
+            **DEFAULT_BINDINGS,
+            **self.profile_data["bindings"]
+        }
+        self.update_binding_labels()
+
+    def update_binding_labels(self):
+        for action, label in self.binding_labels.items():
+            label.setText(self.profile_data.get("bindings", {}).get(action) or "Not assigned")
+
+    def capture_binding(self, action):
+        if self._capture_slot:
+            self.stop_capture()
+            return
+        controller_thread = getattr(self.launcher, "controller_thread", None)
+        if controller_thread is None:
+            QMessageBox.warning(self, "Controller unavailable", "Install pygame-ce and connect a controller before binding inputs.")
+            return
+
+        self.launcher.controller_capture_active = True
+        self.bind_buttons[action].setText("Cancel")
+
+        self._capture_action = action
+        self._capture_slot = self.handle_captured_input
+        controller_thread.raw_input.connect(self._capture_slot)
+        self.status_label.setText(f"Press a controller input for {action}.")
+
+    @pyqtSlot(str)
+    def handle_captured_input(self, input_name):
+        if self._capture_action is None:
+            return
+        self.profile_data["bindings"][self._capture_action] = input_name
+        self.stop_capture()
+        self.update_binding_labels()
+
+    def stop_capture(self):
+        if self._capture_slot:
+            controller_thread = getattr(self.launcher, "controller_thread", None)
+            if controller_thread:
+                try:
+                    controller_thread.raw_input.disconnect(self._capture_slot)
+                except (TypeError, RuntimeError):
+                    pass
+            self._capture_slot = None
+        self._capture_action = None
+        self.launcher.controller_capture_active = False
+        for button in self.bind_buttons.values():
+            button.setText("Bind")
+        self.status_label.setText("")
+
+    def add_profile(self):
+        name, accepted = QInputDialog.getText(self, "Add Controller Profile", "Profile name:")
+        if not accepted or not name.strip():
+            return
+        safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", name.strip()).strip("_")
+        if not safe_name:
+            QMessageBox.warning(self, "Invalid name", "Enter a profile name containing letters or numbers.")
+            return
+        profile_path = INPUTS_DIR / f"{safe_name}.json"
+        if profile_path.exists():
+            QMessageBox.warning(self, "Profile exists", "A profile with that name already exists.")
+            return
+        profile_path.write_text(json.dumps({"name": name.strip(), "bindings": DEFAULT_BINDINGS}, indent=4) + "\n", encoding="utf-8")
+        self.refresh_profiles(profile_path.name)
+
+    def save_profile(self):
+        profile_path = self.profile_combo.currentData()
+        if not profile_path:
+            return
+        try:
+            with open(profile_path, "w", encoding="utf-8") as profile_file:
+                json.dump(self.profile_data, profile_file, indent=4)
+                profile_file.write("\n")
+            self.launcher.config["_controller_profile"] = Path(profile_path).name
+            self.launcher.save_config_file()
+            self.launcher.reload_controller_profile()
+            QMessageBox.information(self, "Saved", "Controller profile saved.")
+        except OSError as error:
+            QMessageBox.critical(self, "Save failed", f"Could not save controller profile: {error}")

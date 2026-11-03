@@ -1,1 +1,11 @@
-
+{
+	"name": "Xbox Controller",
+	"bindings": {
+		"up": "hat:up",
+		"down": "hat:down",
+		"left": "hat:left",
+		"right": "hat:right",
+		"select": "button:0",
+		"back": "button:1"
+	}
+}

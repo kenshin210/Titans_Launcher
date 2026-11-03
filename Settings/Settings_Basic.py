@@ -10,8 +10,10 @@ from PyQt6.QtCore import Qt, pyqtSignal
 
 try:
     from Settings.Logger import log_info, log_warning, log_error
+    from Settings.ControllerSettings import ControllerSettingsWidget
 except ImportError:
     from Logger import log_info, log_warning, log_error
+    from ControllerSettings import ControllerSettingsWidget
 
 DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
 
@@ -64,7 +66,8 @@ class BasicSettingsWidget(QWidget):
             ("⚙  General", 0),
             ("🖼  Background", 1),
             ("🚀  Applications", 2),
-            ("🎨  Theme", 3)
+            ("🎨  Theme", 3),
+            ("🎮  Controller", 4)
         ]
 
         for label, idx in categories:
@@ -132,6 +135,7 @@ class BasicSettingsWidget(QWidget):
         self.pages.addWidget(self.create_background_page())
         self.pages.addWidget(self.create_apps_page())
         self.pages.addWidget(self.create_theme_page())
+        self.pages.addWidget(ControllerSettingsWidget(self.launcher))
 
         root_layout.addWidget(self.pages, stretch=1)
 

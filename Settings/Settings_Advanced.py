@@ -8,13 +8,15 @@ from PyQt6.QtWidgets import (
     QListWidget, QComboBox, QCompleter, QLabel, QScrollArea,
     QTextEdit, QTabWidget
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QProcess, QTimer
 from PyQt6.QtGui import QIcon
 
 try:
     from Settings.Logger import logger, LOG_FILE, log_info, log_warning, log_error, log_critical
+    from Settings.ControllerSettings import ControllerSettingsWidget
 except ImportError:
     from Logger import logger, LOG_FILE, log_info, log_warning, log_error, log_critical
+    from ControllerSettings import ControllerSettingsWidget
 
 DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
 
@@ -70,7 +72,8 @@ class AdvancedSettingsWidget(QWidget):
             ("🏷  App Icons", 3),
             ("🎨  Theme & Power", 4),
             ("🌐  NTP & Region", 5),
-            ("📋  Logging", 6)
+            ("📋  Logging", 6),
+            ("🎮  Controller", 7)
         ]
 
         for label, idx in categories:
@@ -141,6 +144,7 @@ class AdvancedSettingsWidget(QWidget):
         self.pages.addWidget(self.create_theme_page())
         self.pages.addWidget(self.create_ntp_page())
         self.pages.addWidget(self.create_logging_page())
+        self.pages.addWidget(ControllerSettingsWidget(self.launcher))
 
         root_layout.addWidget(self.pages, stretch=1)
 
@@ -804,23 +808,56 @@ class AdvancedSettingsWidget(QWidget):
                 return
             terminal_view.append(f"❯ {cmd}")
             cmd_input.clear()
+            process = QProcess(self)
+            process.setProgram("/bin/sh")
+            process.setArguments(["-c", cmd])
+            process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+            run_btn.setEnabled(False)
 
-            def run_async():
-                try:
-                    import subprocess
-                    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-                    output = res.stdout if res.returncode == 0 else (res.stdout + res.stderr)
-                    if not output.strip():
-                        output = "[Command executed successfully with no output]"
-                    terminal_view.append(output + "\n")
-                    logger.debug(f"Terminal Command: {cmd}", details=output[:300])
-                except Exception as e:
-                    err_msg = f"Execution error: {e}"
-                    terminal_view.append(err_msg + "\n")
+            captured_output = []
+            timed_out = {"value": False}
+            handled = {"value": False}
+            timeout_timer = QTimer(process)
+            timeout_timer.setSingleShot(True)
+
+            def read_output():
+                text = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
+                if text:
+                    captured_output.append(text)
+                    terminal_view.append(text.rstrip())
+
+            def finish_command(exit_code=None, error_message=None):
+                if handled["value"]:
+                    return
+                handled["value"] = True
+                timeout_timer.stop()
+                read_output()
+                run_btn.setEnabled(True)
+
+                if error_message:
+                    err_msg = f"Execution error: {error_message}"
+                    terminal_view.append(err_msg)
                     logger.error(err_msg)
+                elif timed_out["value"]:
+                    err_msg = "Execution error: command timed out after 15 seconds"
+                    terminal_view.append(err_msg)
+                    logger.error(err_msg)
+                else:
+                    output = "".join(captured_output).strip()
+                    if not output:
+                        terminal_view.append("[Command executed successfully with no output]")
+                    logger.info(f"Terminal Command (exit {exit_code}): {cmd}", details=output[:300])
+                process.deleteLater()
 
-            import threading
-            threading.Thread(target=run_async, daemon=True).start()
+            process.readyReadStandardOutput.connect(read_output)
+            process.finished.connect(lambda exit_code, _status: finish_command(exit_code))
+            process.errorOccurred.connect(
+                lambda error: finish_command(error_message=process.errorString())
+                if error == QProcess.ProcessError.FailedToStart else None
+            )
+            timeout_timer.timeout.connect(lambda: (timed_out.__setitem__("value", True), process.kill()))
+            timeout_timer.start(15000)
+            process.start()
 
         run_btn.clicked.connect(execute_command)
         cmd_input.returnPressed.connect(execute_command)

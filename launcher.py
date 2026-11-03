@@ -37,6 +37,15 @@ install_excepthook()
 
 CONFIG_PATH = Path.home() / ".config" / "Titans-launcher" / "profiles.json"
 DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
+CONTROLLER_INPUTS_DIR = Path(__file__).resolve().parent / "Settings" / "Inputs"
+DEFAULT_CONTROLLER_BINDINGS = {
+    "up": "hat:up",
+    "down": "hat:down",
+    "left": "hat:left",
+    "right": "hat:right",
+    "select": "button:0",
+    "back": "button:1"
+}
 
 # Default configuration generated on first run
 DEFAULT_CONFIG = {
@@ -167,7 +176,7 @@ def fetch_ntp_time(server_address, offset_hours):
     return datetime.now(timezone(timedelta(hours=offset_hours)))
 
 class PygameControllerThread(QThread):
-    button_pressed = pyqtSignal(str)
+    raw_input = pyqtSignal(str)
 
     def run(self):
         if not PYGAME_AVAILABLE:
@@ -185,6 +194,11 @@ class PygameControllerThread(QThread):
 
         while True:
             try:
+                if not pygame.joystick.get_init():
+                    pygame.joystick.init()
+                    joysticks.clear()
+                    log_info("Reinitialized pygame joystick subsystem.")
+
                 pygame.event.pump()
                 
                 for i in range(pygame.joystick.get_count()):
@@ -196,24 +210,28 @@ class PygameControllerThread(QThread):
 
                 for event in pygame.event.get():
                     if event.type == pygame.JOYBUTTONDOWN:
-                        if event.button == 0:
-                            self.button_pressed.emit("A")
-                        elif event.button == 1:
-                            self.button_pressed.emit("B")
+                        self.raw_input.emit(f"button:{event.button}")
                     elif event.type == pygame.JOYHATMOTION:
                         hat_x, hat_y = event.value
                         if hat_x == 1:
-                            self.button_pressed.emit("RIGHT")
+                            self.raw_input.emit("hat:right")
                         elif hat_x == -1:
-                            self.button_pressed.emit("LEFT")
+                            self.raw_input.emit("hat:left")
                         if hat_y == 1:
-                            self.button_pressed.emit("UP")
+                            self.raw_input.emit("hat:up")
                         elif hat_y == -1:
-                            self.button_pressed.emit("DOWN")
+                            self.raw_input.emit("hat:down")
 
                 time.sleep(0.03)
             except Exception as e:
                 log_warning(f"Pygame controller polling error: {e}")
+                if not pygame.joystick.get_init():
+                    try:
+                        pygame.joystick.init()
+                        joysticks.clear()
+                        log_info("Recovered pygame joystick subsystem after polling error.")
+                    except Exception as init_error:
+                        log_error(f"Failed to recover pygame joystick subsystem: {init_error}")
                 time.sleep(2)
 
 class ThemedMessageBox(QDialog):
@@ -463,6 +481,8 @@ class MainApp(QWidget):
         super().__init__()
         log_info("Starting Titans HTPC Launcher...")
         self.config = load_config()
+        self.controller_capture_active = False
+        self.reload_controller_profile()
         self.cap = None
         self.current_ntp_time = datetime.now()
 
@@ -473,19 +493,64 @@ class MainApp(QWidget):
 
         if PYGAME_AVAILABLE:
             self.controller_thread = PygameControllerThread()
-            self.controller_thread.button_pressed.connect(self.handle_controller_input)
+            self.controller_thread.raw_input.connect(self.handle_controller_input)
             self.controller_thread.start()
 
-    def handle_controller_input(self, action):
-        if action in ("RIGHT", "DOWN"):
+    def reload_controller_profile(self):
+        profile_name = Path(self.config.get("_controller_profile", "Xbox Controller.json")).name
+        profile_path = CONTROLLER_INPUTS_DIR / profile_name
+        bindings = DEFAULT_CONTROLLER_BINDINGS
+        try:
+            if not profile_path.exists():
+                CONTROLLER_INPUTS_DIR.mkdir(parents=True, exist_ok=True)
+                with profile_path.open("w", encoding="utf-8") as profile_file:
+                    json.dump({"name": profile_path.stem, "bindings": DEFAULT_CONTROLLER_BINDINGS}, profile_file, indent=4)
+                    profile_file.write("\n")
+                log_info(f"Created default controller profile at {profile_path}")
+
+            with profile_path.open("r", encoding="utf-8") as profile_file:
+                profile_data = json.load(profile_file)
+            if isinstance(profile_data, dict) and isinstance(profile_data.get("bindings"), dict):
+                bindings = {**DEFAULT_CONTROLLER_BINDINGS, **profile_data["bindings"]}
+        except json.JSONDecodeError as error:
+            backup_path = profile_path.with_name(
+                f"{profile_path.stem}.invalid-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}{profile_path.suffix}"
+            )
+            try:
+                profile_path.replace(backup_path)
+                with profile_path.open("w", encoding="utf-8") as profile_file:
+                    json.dump({"name": profile_path.stem, "bindings": DEFAULT_CONTROLLER_BINDINGS}, profile_file, indent=4)
+                    profile_file.write("\n")
+                log_warning(
+                    f"Invalid controller profile {profile_path} was reset to defaults.",
+                    details=f"{error}; original backed up to {backup_path}"
+                )
+            except OSError as repair_error:
+                log_warning(
+                    f"Could not repair controller profile {profile_path}; using default bindings.",
+                    details=f"{error}; {repair_error}"
+                )
+        except OSError as error:
+            log_warning(f"Could not load controller profile {profile_path}; using default bindings.", details=str(error))
+        self.controller_bindings = {
+            input_name: action
+            for action, input_name in bindings.items()
+            if isinstance(action, str) and isinstance(input_name, str) and input_name
+        }
+
+    def handle_controller_input(self, input_name):
+        if self.controller_capture_active:
+            return
+        action = self.controller_bindings.get(input_name)
+        if action in ("right", "down"):
             self.focusNextChild()
-        elif action in ("LEFT", "UP"):
+        elif action in ("left", "up"):
             self.focusPreviousChild()
-        elif action == "A":
+        elif action == "select":
             focused = QApplication.focusWidget()
             if isinstance(focused, (QPushButton, QToolButton, AnimatedLauncherButton)):
                 focused.click()
-        elif action == "B":
+        elif action == "back":
             if hasattr(self, 'stacked_widget') and self.stacked_widget.currentWidget() == self.settings_page:
                 self.show_home_page()
             else:
