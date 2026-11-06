@@ -1,7 +1,7 @@
 echo "Installing Arch Dependencies"
 
 echo "Installing Python"
-sudo pacman -S Python
+sudo pacman -S python
 
 python -m venv .venv
 source .venv/bin/activate
