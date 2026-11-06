@@ -947,6 +947,17 @@ class MainApp(QWidget):
             log_info("User initiated exit. Stopping background video and closing launcher.")
             self.close()
 
+    def show_error_overlay(self, title, message):
+        dialog = ThemedMessageBox(
+            self,
+            title=title,
+            message=message,
+            theme_color=self.get_theme_color()
+        )
+        dialog.no_btn.hide()
+        dialog.yes_btn.setText("OK")
+        dialog.exec()
+
     def closeEvent(self, event):
         if hasattr(self, "clock_timer"):
             self.clock_timer.stop()
@@ -983,7 +994,7 @@ class MainApp(QWidget):
                 subprocess.Popen(sleep_cmd.split())
             except Exception as e:
                 log_error(f"Failed to execute sleep command '{sleep_cmd}': {e}", details=str(e))
-                QMessageBox.critical(self, "Error", f"Failed to execute sleep command: {e}")
+                self.show_error_overlay("Sleep Failed", f"Could not execute sleep command:\n{e}")
 
     def trigger_restart(self):
         theme_color = self.get_theme_color()
@@ -1001,7 +1012,7 @@ class MainApp(QWidget):
                 self.close()
             except Exception as e:
                 log_error(f"Failed to execute restart command '{restart_cmd}': {e}", details=str(e))
-                QMessageBox.critical(self, "Error", f"Failed to execute restart command: {e}")
+                self.show_error_overlay("Restart Failed", f"Could not execute restart command:\n{e}")
 
     def trigger_shutdown(self):
         theme_color = self.get_theme_color()
@@ -1019,7 +1030,7 @@ class MainApp(QWidget):
                 self.close()
             except Exception as e:
                 log_error(f"Failed to execute power command '{power_cmd}': {e}", details=str(e))
-                QMessageBox.critical(self, "Error", f"Failed to execute power command: {e}")
+                self.show_error_overlay("Shutdown Failed", f"Could not execute power command:\n{e}")
 
     def update_power_button_display(self):
         if not hasattr(self, 'power_btn'):
@@ -1269,39 +1280,23 @@ class MainApp(QWidget):
         QTimer.singleShot(100, self.refresh_button_geometries)
 
     def launch_app(self, data):
-        if hasattr(self, 'video_timer'):
-            self.video_timer.stop()
-        if self.cap:
-            self.cap.release()
-
         executable = data.get("command", "").strip()
         arguments_str = data.get("arguments", "").strip()
 
         if not executable:
             log_warning("Launch cancelled: No executable or command specified for application.")
-            QMessageBox.warning(self, "Missing Executable", "No executable or command specified for this application.")
-            self.init_video_background()
+            self.show_error_overlay("Missing Executable", "No executable or command is configured for this application.")
             return
 
         if Path(executable).is_absolute() or "/" in executable or "\\" in executable:
             if not Path(executable).exists():
                 log_error(f"Application launch failed: Executable file not found on disk at '{executable}'")
-                QMessageBox.critical(
-                    self,
-                    "Application Not Found",
-                    f"The executable file could not be found:\n\n{executable}\n\nPlease check your application settings."
-                )
-                self.init_video_background()
+                self.show_error_overlay("Application Not Found", f"The executable could not be found:\n{executable}")
                 return
         else:
             if shutil.which(executable) is None:
                 log_error(f"Application launch failed: Command '{executable}' not found in system PATH or as executable file.")
-                QMessageBox.critical(
-                    self,
-                    "Command Not Found",
-                    f"The command '{executable}' could not be found in your system PATH or as a valid file."
-                )
-                self.init_video_background()
+                self.show_error_overlay("Command Not Found", f"The command could not be found:\n{executable}")
                 return
 
         if data.get("manage_antimicrox", False):
@@ -1319,6 +1314,10 @@ class MainApp(QWidget):
                 ])
             elif profile_path:
                 log_warning(f"AntiMicroX profile specified but not found on disk: {profile_path}")
+                self.show_error_overlay(
+                    "AntiMicroX Profile Not Found",
+                    f"The specified AntiMicroX profile could not be found:\n{profile_path}"
+                )
 
         cmd_list = [executable]
         arguments = shlex.split(arguments_str)
@@ -1359,12 +1358,10 @@ class MainApp(QWidget):
                     firefox_profile.mkdir(parents=True, exist_ok=True)
                 except OSError as error:
                     log_error(f"Could not create the dedicated Firefox profile at {firefox_profile}: {error}")
-                    QMessageBox.critical(
-                        self,
+                    self.show_error_overlay(
                         "Firefox Profile Error",
                         f"Could not create a dedicated Firefox profile:\n{error}"
                     )
-                    self.init_video_background()
                     return
                 arguments[0:0] = ["--profile", str(firefox_profile)]
         cmd_list.extend(arguments)
@@ -1377,8 +1374,7 @@ class MainApp(QWidget):
             log_info(f"Application '{executable}' running (PID: {proc.pid})")
         except Exception as e:
             log_critical(f"Failed to execute process '{executable}': {e}", details=str(e))
-            QMessageBox.critical(self, "Launch Error", f"Failed to launch application:\n{e}")
-            self.init_video_background()
+            self.show_error_overlay("Launch Failed", f"Could not launch {executable}:\n{e}")
             return
 
         self.enter_sleep_state()
