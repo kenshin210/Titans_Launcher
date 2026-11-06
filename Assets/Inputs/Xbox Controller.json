@@ -1,0 +1,13 @@
+{
+	"name": "Xbox Controller",
+	"bindings": {
+		"up": ["hat:up", "axis:1:negative"],
+		"down": ["hat:down", "axis:1:positive"],
+		"left": ["hat:left", "axis:0:negative"],
+		"right": ["hat:right", "axis:0:positive"],
+		"select": ["button:0"],
+		"back": ["button:1"],
+		"previous_tab": ["button:4"],
+		"next_tab": ["button:5"]
+	}
+}
