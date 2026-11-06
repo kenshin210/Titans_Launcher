@@ -8,6 +8,7 @@ import shutil
 import shlex
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 import cv2
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QLabel,
@@ -46,7 +47,8 @@ DEFAULT_CONTROLLER_BINDINGS = {
     "select": ["button:0"],
     "back": ["button:1"],
     "previous_tab": ["button:4"],
-    "next_tab": ["button:5"]
+    "next_tab": ["button:5"],
+    "close_app": ["button:8"]
 }
 
 # Default configuration generated on first run
@@ -86,10 +88,23 @@ DEFAULT_CONFIG = {
         "icon_path": ""
     },
     "Youtube": {
-        "command": "youtube",
-        "arguments": "",
+        "command": "firefox",
+        "arguments": "--kiosk https://www.youtube.com",
+        "type": "website",
+        "website_url": "https://www.youtube.com",
         "manage_antimicrox": True,
         "profile": "",
+        "controller_close_enabled": False,
+        "icon_path": ""
+    },
+    "Google TV": {
+        "command": "firefox",
+        "arguments": "--kiosk https://tv.google/",
+        "type": "website",
+        "website_url": "https://tv.google/",
+        "manage_antimicrox": True,
+        "profile": "",
+        "controller_close_enabled": False,
         "icon_path": ""
     }
 }
@@ -180,6 +195,14 @@ def fetch_ntp_time(server_address, offset_hours):
 class PygameControllerThread(QThread):
     raw_input = pyqtSignal(str)
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stop_event = threading.Event()
+
+    def stop(self):
+        self._stop_event.set()
+        self.requestInterruption()
+
     def run(self):
         if not PYGAME_AVAILABLE:
             log_warning("pygame-ce module not available. Gamepad input disabled.")
@@ -195,7 +218,7 @@ class PygameControllerThread(QThread):
         joysticks = {}
         active_axes = {}
 
-        while True:
+        while not self._stop_event.is_set() and not self.isInterruptionRequested():
             try:
                 if not pygame.joystick.get_init():
                     pygame.joystick.init()
@@ -240,8 +263,10 @@ class PygameControllerThread(QThread):
                         elif axis_input is None:
                             active_axes.pop(axis_key, None)
 
-                time.sleep(0.03)
+                self._stop_event.wait(0.03)
             except Exception as e:
+                if self._stop_event.is_set() or self.isInterruptionRequested():
+                    break
                 log_warning(f"Pygame controller polling error: {e}")
                 if not pygame.joystick.get_init():
                     try:
@@ -250,7 +275,9 @@ class PygameControllerThread(QThread):
                         log_info("Recovered pygame joystick subsystem after polling error.")
                     except Exception as init_error:
                         log_error(f"Failed to recover pygame joystick subsystem: {init_error}")
-                time.sleep(2)
+                self._stop_event.wait(2)
+
+        pygame.quit()
 
 class ThemedMessageBox(QDialog):
     def __init__(self, parent=None, title="", message="", theme_color="#DC143C"):
@@ -398,14 +425,28 @@ class AnimatedLauncherButton(QToolButton):
         self.click_anim.start()
 
 class ApplicationEditorDialog(QDialog):
-    def __init__(self, parent=None, title="", command="", arguments="", manage_am=False, profile_path=""):
+    def __init__(
+        self, parent=None, title="", command="", arguments="", manage_am=False,
+        profile_path="", controller_close_enabled=False, app_type="application",
+        website_url=""
+    ):
         super().__init__(parent)
-        self.setWindowTitle("Edit Application")
-        self.resize(480, 340)
+        self.setWindowTitle("Add or Edit Application")
+        self.resize(520, 400)
         self.setStyleSheet("background-color: #222; color: white;")
 
-        layout = QFormLayout(self)
+        layout = QVBoxLayout(self)
+        type_form = QFormLayout()
+        self.type_combo = QComboBox()
+        self.type_combo.addItem("Application", "application")
+        self.type_combo.addItem("Website", "website")
+        self.type_combo.setCurrentIndex(
+            max(0, self.type_combo.findData(app_type))
+        )
+        type_form.addRow("Type:", self.type_combo)
+        layout.addLayout(type_form)
 
+        self.mode_stack = QStackedWidget()
         self.name_input = QLineEdit(title)
 
         self.cmd_input = QLineEdit(command)
@@ -417,6 +458,31 @@ class ApplicationEditorDialog(QDialog):
         cmd_layout.addWidget(self.cmd_browse_btn)
 
         self.args_input = QLineEdit(arguments)
+
+        application_fields = QWidget()
+        application_form = QFormLayout(application_fields)
+        application_form.addRow("App Executable:", cmd_layout)
+        application_form.addRow("Arguments (optional):", self.args_input)
+        self.mode_stack.addWidget(application_fields)
+
+        website_fields = QWidget()
+        website_form = QFormLayout(website_fields)
+        self.website_url_input = QLineEdit(website_url)
+        self.website_url_input.setPlaceholderText("https://example.com")
+        self.website_browser_input = QLineEdit(command or "firefox")
+        self.website_browser_input.setPlaceholderText("firefox")
+        website_form.addRow("Website URL:", self.website_url_input)
+        website_form.addRow("Browser executable:", self.website_browser_input)
+        self.mode_stack.addWidget(website_fields)
+        self.type_combo.currentIndexChanged.connect(
+            lambda: self.mode_stack.setCurrentIndex(self.type_combo.currentIndex())
+        )
+        self.mode_stack.setCurrentIndex(self.type_combo.currentIndex())
+
+        self.controller_close_cb = QCheckBox(
+            "Xbox Guide button closes this app"
+        )
+        self.controller_close_cb.setChecked(controller_close_enabled)
 
         self.manage_am_cb = QCheckBox("Manage AntiMicroX (Kill & Load Profile)")
         self.manage_am_cb.setChecked(manage_am)
@@ -430,16 +496,18 @@ class ApplicationEditorDialog(QDialog):
         profile_layout.addWidget(self.profile_input)
         profile_layout.addWidget(self.browse_btn)
 
-        layout.addRow("Application Name:", self.name_input)
-        layout.addRow("App Executable:", cmd_layout)
-        layout.addRow("Arguments (optional):", self.args_input)
-        layout.addRow(self.manage_am_cb)
-        layout.addRow("AntiMicroX .amxp Path:", profile_layout)
+        details_form = QFormLayout()
+        details_form.addRow("Application Name:", self.name_input)
+        details_form.addRow(self.controller_close_cb)
+        details_form.addRow(self.manage_am_cb)
+        details_form.addRow("AntiMicroX .amxp Path:", profile_layout)
+        layout.addWidget(self.mode_stack)
+        layout.insertLayout(1, details_form)
 
         save_btn = QPushButton("Save")
         save_btn.setStyleSheet("background-color: #DC143C; padding: 8px; font-weight: bold;")
         save_btn.clicked.connect(self.accept)
-        layout.addRow(save_btn)
+        layout.addWidget(save_btn)
 
         self.toggle_am_path(manage_am)
 
@@ -465,6 +533,32 @@ class ApplicationEditorDialog(QDialog):
             self.profile_input.setText(file_path)
 
     def accept(self):
+        if self.type_combo.currentData() == "website":
+            website_url = self.website_url_input.text().strip()
+            if website_url and "://" not in website_url:
+                website_url = f"https://{website_url}"
+                self.website_url_input.setText(website_url)
+            try:
+                parsed_url = urlsplit(website_url)
+            except ValueError:
+                parsed_url = None
+            if (
+                parsed_url is None
+                or parsed_url.scheme not in ("http", "https")
+                or not parsed_url.netloc
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Website URL",
+                    "Enter a valid website address, such as https://example.com."
+                )
+                return
+            if not self.website_browser_input.text().strip():
+                QMessageBox.warning(self, "Missing Browser", "Enter a browser executable.")
+                return
+            super().accept()
+            return
+
         cmd = self.cmd_input.text().strip()
         if cmd and (Path(cmd).is_absolute() or "/" in cmd or "\\" in cmd):
             if not Path(cmd).exists():
@@ -481,11 +575,23 @@ class ApplicationEditorDialog(QDialog):
         super().accept()
 
     def get_data(self):
+        app_type = self.type_combo.currentData()
+        if app_type == "website":
+            website_url = self.website_url_input.text().strip()
+            command = self.website_browser_input.text().strip()
+            arguments = f"--kiosk {shlex.quote(website_url)}"
+        else:
+            website_url = ""
+            command = self.cmd_input.text().strip()
+            arguments = self.args_input.text().strip()
         return (
             self.name_input.text().strip(),
             {
-                "command": self.cmd_input.text().strip(),
-                "arguments": self.args_input.text().strip(),
+                "type": app_type,
+                "website_url": website_url,
+                "command": command,
+                "arguments": arguments,
+                "controller_close_enabled": self.controller_close_cb.isChecked(),
                 "manage_antimicrox": self.manage_am_cb.isChecked(),
                 "profile": self.profile_input.text().strip(),
                 "icon_path": ""
@@ -500,6 +606,10 @@ class MainApp(QWidget):
         log_info("Starting Titans HTPC Launcher...")
         self.config = load_config()
         self.controller_capture_active = False
+        self.active_app_process = None
+        self.active_app_controller_close_enabled = False
+        self.launcher_sleeping = False
+        self.controller_back_suppressed_until = 0.0
         self.reload_controller_profile()
         self.cap = None
         self.current_ntp_time = datetime.now()
@@ -510,7 +620,7 @@ class MainApp(QWidget):
         self.start_ntp_sync_thread()
 
         if PYGAME_AVAILABLE:
-            self.controller_thread = PygameControllerThread()
+            self.controller_thread = PygameControllerThread(self)
             self.controller_thread.raw_input.connect(self.handle_controller_input)
             self.controller_thread.start()
 
@@ -570,6 +680,21 @@ class MainApp(QWidget):
         if self.controller_capture_active:
             return
         action = self.controller_bindings.get(input_name)
+        if self.launcher_sleeping or self.isHidden():
+            if (
+                action == "close_app"
+                and self.active_app_controller_close_enabled
+                and self.active_app_process is not None
+            ):
+                if self.active_app_process.poll() is None:
+                    log_info("Closing the launched application from controller close-app input.")
+                    try:
+                        self.active_app_process.terminate()
+                    except OSError as error:
+                        log_error(f"Failed to close launched application: {error}", details=str(error))
+            return
+        if action == "back" and time.monotonic() < self.controller_back_suppressed_until:
+            return
         if self.handle_power_menu_input(action):
             return
         if self.handle_confirmation_dialog_input(action):
@@ -819,11 +944,28 @@ class MainApp(QWidget):
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             log_info("User initiated exit. Stopping background video and closing launcher.")
-            if hasattr(self, 'video_timer'):
-                self.video_timer.stop()
-            if self.cap:
-                self.cap.release()
-            QApplication.quit()
+            self.close()
+
+    def closeEvent(self, event):
+        if hasattr(self, "clock_timer"):
+            self.clock_timer.stop()
+        if hasattr(self, "video_timer"):
+            self.video_timer.stop()
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+
+        ntp_stop_event = getattr(self, "_ntp_stop_event", None)
+        if ntp_stop_event is not None:
+            ntp_stop_event.set()
+
+        controller_thread = getattr(self, "controller_thread", None)
+        if controller_thread is not None and controller_thread.isRunning():
+            log_info("Stopping controller polling thread during launcher shutdown.")
+            controller_thread.stop()
+            controller_thread.wait()
+
+        event.accept()
 
     def trigger_sleep(self):
         theme_color = self.get_theme_color()
@@ -891,14 +1033,16 @@ class MainApp(QWidget):
             self.power_btn.setText("⏻")
 
     def start_ntp_sync_thread(self):
+        self._ntp_stop_event = threading.Event()
+
         def sync_worker():
-            while True:
+            while not self._ntp_stop_event.is_set():
                 server = self.config.get("_ntp_server", "nz.pool.ntp.org")
                 offset = float(self.config.get("_ntp_offset", 12))
                 ntp_time = fetch_ntp_time(server, offset)
                 if ntp_time:
                     self.current_ntp_time = ntp_time
-                time.sleep(1800)
+                self._ntp_stop_event.wait(1800)
 
         t = threading.Thread(target=sync_worker, daemon=True)
         t.start()
@@ -1155,12 +1299,59 @@ class MainApp(QWidget):
                 log_warning(f"AntiMicroX profile specified but not found on disk: {profile_path}")
 
         cmd_list = [executable]
-        if arguments_str:
-            cmd_list.extend(shlex.split(arguments_str))
+        arguments = shlex.split(arguments_str)
+        executable_name = Path(executable).name.lower()
+        is_website = data.get("type") == "website"
+        if executable_name in ("firefox", "firefox-esr") and not is_website:
+            arguments = [argument for argument in arguments if argument != "--kiosk"]
+
+        url_index = next(
+            (index for index, argument in enumerate(arguments) if argument.startswith(("http://", "https://"))),
+            None
+        )
+        controller_close_enabled = data.get("controller_close_enabled", False)
+        if (
+            (is_website or controller_close_enabled)
+            and executable_name in ("firefox", "firefox-esr")
+            and url_index is not None
+        ):
+            if not any(
+                argument in ("--new-window", "-new-window", "--new-tab", "-new-tab")
+                for argument in arguments
+            ):
+                arguments.insert(url_index, "--new-window")
+
+            arguments.extend(["--no-remote"])
+            has_explicit_profile = any(
+                argument in ("--profile", "-profile", "-P") or argument.startswith("--profile=")
+                for argument in arguments
+            )
+            if has_explicit_profile:
+                log_warning(
+                    "Firefox URL launch uses an explicitly configured profile; "
+                    "the launcher cannot guarantee that Firefox will use an isolated profile."
+                )
+            else:
+                firefox_profile = CONFIG_PATH.parent / "firefox-app-profile"
+                try:
+                    firefox_profile.mkdir(parents=True, exist_ok=True)
+                except OSError as error:
+                    log_error(f"Could not create the dedicated Firefox profile at {firefox_profile}: {error}")
+                    QMessageBox.critical(
+                        self,
+                        "Firefox Profile Error",
+                        f"Could not create a dedicated Firefox profile:\n{error}"
+                    )
+                    self.init_video_background()
+                    return
+                arguments[0:0] = ["--profile", str(firefox_profile)]
+        cmd_list.extend(arguments)
 
         try:
             log_info(f"Spawning application process: {' '.join(cmd_list)}")
             proc = subprocess.Popen(cmd_list)
+            self.active_app_process = proc
+            self.active_app_controller_close_enabled = controller_close_enabled
             log_info(f"Application '{executable}' running (PID: {proc.pid})")
         except Exception as e:
             log_critical(f"Failed to execute process '{executable}': {e}", details=str(e))
@@ -1168,7 +1359,7 @@ class MainApp(QWidget):
             self.init_video_background()
             return
 
-        self.hide()
+        self.enter_sleep_state()
 
         def wait_and_restore():
             proc.wait()
@@ -1177,9 +1368,28 @@ class MainApp(QWidget):
 
         threading.Thread(target=wait_and_restore, daemon=True).start()
 
+    def enter_sleep_state(self):
+        log_info("Putting launcher to sleep while the application is running.")
+        self.launcher_sleeping = True
+        if hasattr(self, "clock_timer"):
+            self.clock_timer.stop()
+        if hasattr(self, "video_timer"):
+            self.video_timer.stop()
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        self.hide()
+
     def on_app_finished(self):
         log_info("Restoring launcher interface after application exit.")
+        self.active_app_process = None
+        self.active_app_controller_close_enabled = False
+        self.launcher_sleeping = False
+        self.controller_back_suppressed_until = time.monotonic() + 1.0
         self.showFullScreen()
+        if hasattr(self, "clock_timer"):
+            self.clock_timer.start(1000)
+        self.update_clock_display()
         self.init_video_background()
 
     def show_settings_page(self):
@@ -1192,8 +1402,8 @@ class MainApp(QWidget):
             try:
                 self.build_settings_view(self.config.get("_advanced_mode", False))
                 self.stacked_widget.setCurrentWidget(self.settings_page)
-                if hasattr(self, 'current_settings_widget') and hasattr(self.current_settings_widget, 'focus_first_menu_item'):
-                    self.current_settings_widget.focus_first_menu_item()
+                if hasattr(self, 'current_settings_widget') and hasattr(self.current_settings_widget, 'focus_current_menu_item'):
+                    self.current_settings_widget.focus_current_menu_item()
                 elif hasattr(self, 'back_btn'):
                     self.back_btn.setFocus()
             except Exception as e:
@@ -1337,8 +1547,8 @@ class MainApp(QWidget):
                     self.settings_page.show()
                     QTimer.singleShot(25, settings_proxy.deleteLater)
                     self.is_animating = False
-                    if hasattr(self, 'current_settings_widget') and hasattr(self.current_settings_widget, 'focus_first_menu_item'):
-                        self.current_settings_widget.focus_first_menu_item()
+                    if hasattr(self, 'current_settings_widget') and hasattr(self.current_settings_widget, 'focus_current_menu_item'):
+                        self.current_settings_widget.focus_current_menu_item()
                     elif hasattr(self, 'back_btn'):
                         self.back_btn.setFocus()
 
@@ -1459,6 +1669,9 @@ class MainApp(QWidget):
         self.show_settings_page()
 
     def build_settings_view(self, is_advanced):
+        selected_section = getattr(self, "current_settings_widget", None)
+        selected_section = getattr(selected_section, "current_section", "general")
+
         while self.settings_container.count():
             item = self.settings_container.takeAt(0)
             if item.widget():
@@ -1473,10 +1686,14 @@ class MainApp(QWidget):
         try:
             if is_advanced:
                 from Settings.Settings_Advanced import AdvancedSettingsWidget
-                self.current_settings_widget = AdvancedSettingsWidget(self, self, on_toggle_advanced)
+                self.current_settings_widget = AdvancedSettingsWidget(
+                    self, self, on_toggle_advanced, initial_section=selected_section
+                )
             else:
                 from Settings.Settings_Basic import BasicSettingsWidget
-                self.current_settings_widget = BasicSettingsWidget(self, self, on_toggle_advanced)
+                self.current_settings_widget = BasicSettingsWidget(
+                    self, self, on_toggle_advanced, initial_section=selected_section
+                )
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
