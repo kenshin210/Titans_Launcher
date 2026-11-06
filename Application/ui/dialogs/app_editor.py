@@ -20,10 +20,7 @@ from PyQt6.QtWidgets import (
 
 from ...styles import load_stylesheet
 
-try:
-    from Settings.Logger import log_warning
-except ImportError:
-    from Logger import log_warning
+from Application.ui.Settings.Logger import log_warning
 
 
 class ApplicationEditorDialog(QDialog):

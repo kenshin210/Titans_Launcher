@@ -20,16 +20,18 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction
 from .styles import load_stylesheet
 
-try:
-    from Settings.Logger import log_critical, log_error, log_warning, log_info, install_excepthook
-except ImportError:
-    from Logger import log_critical, log_error, log_warning, log_info, install_excepthook
+from Application.ui.Settings.Logger import (
+    install_excepthook,
+    log_critical,
+    log_error,
+    log_info,
+    log_warning,
+)
 
 install_excepthook()
 
 from .core.config import (
     CONFIG_PATH,
-    CONTROLLER_INPUTS_DIR,
     DEFAULT_CONFIG,
     DEFAULT_CONTROLLER_BINDINGS,
     DEFAULT_VIDEO_PATH,
@@ -1048,12 +1050,12 @@ class MainApp(QWidget):
 
         try:
             if is_advanced:
-                from Settings.Settings_Advanced import AdvancedSettingsWidget
+                from Application.ui.Settings.Settings_Advanced import AdvancedSettingsWidget
                 self.current_settings_widget = AdvancedSettingsWidget(
                     self, self, on_toggle_advanced, initial_section=selected_section
                 )
             else:
-                from Settings.Settings_Basic import BasicSettingsWidget
+                from Application.ui.Settings.Settings_Basic import BasicSettingsWidget
                 self.current_settings_widget = BasicSettingsWidget(
                     self, self, on_toggle_advanced, initial_section=selected_section
                 )

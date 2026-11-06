@@ -9,20 +9,13 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-try:
-    from Settings.Logger import log_info, log_warning, log_error
-    from Settings.ControllerSettings import ControllerSettingsWidget
-    AboutDeviceWidget = import_module(
-        "Settings.About Device.AboutDeviceSettings"
-    ).AboutDeviceWidget
-except ImportError:
-    from Logger import log_info, log_warning, log_error
-    from ControllerSettings import ControllerSettingsWidget
-    AboutDeviceWidget = import_module(
-        "About Device.AboutDeviceSettings"
-    ).AboutDeviceWidget
+from Application.core.config import DEFAULT_VIDEO_PATH
+from Application.ui.Settings.Logger import log_error, log_info, log_warning
+from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
 
-DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
+AboutDeviceWidget = import_module(
+    "Application.ui.Settings.About Device.AboutDeviceSettings"
+).AboutDeviceWidget
 
 class MenuNavButton(QPushButton):
     def __init__(self, text, parent=None):
@@ -335,10 +328,7 @@ class BasicSettingsWidget(QWidget):
         layout.addLayout(btn_layout)
 
         def add_app():
-            try:
-                from Launcher import ApplicationEditorDialog
-            except ImportError:
-                from launcher import ApplicationEditorDialog
+            from Application.ui.dialogs.app_editor import ApplicationEditorDialog
             editor = ApplicationEditorDialog(self.dialog or self.launcher)
             if editor.exec() == 1:
                 name, data = editor.get_data()

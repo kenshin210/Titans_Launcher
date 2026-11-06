@@ -3,10 +3,7 @@ import struct
 import threading
 from datetime import datetime, timedelta, timezone
 
-try:
-    from Settings.Logger import log_info, log_warning
-except ImportError:
-    from Logger import log_info, log_warning
+from Application.ui.Settings.Logger import log_info, log_warning
 
 
 def fetch_ntp_time(server_address, offset_hours):

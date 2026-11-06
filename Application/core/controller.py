@@ -7,10 +7,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from .config import CONTROLLER_INPUTS_DIR, DEFAULT_CONTROLLER_BINDINGS
 
-try:
-    from Settings.Logger import log_error, log_info, log_warning
-except ImportError:
-    from Logger import log_error, log_info, log_warning
+from Application.ui.Settings.Logger import log_error, log_info, log_warning
 
 try:
     import pygame
@@ -32,7 +29,7 @@ class PygameControllerThread(QThread):
         self.requestInterruption()
 
     def run(self):
-        if not PYGAME_AVAILABLE:
+        if not PYGAME_AVAILABLE or pygame is None:
             log_warning("pygame-ce module not available. Gamepad input disabled.")
             return
 

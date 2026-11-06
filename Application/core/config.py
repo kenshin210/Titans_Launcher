@@ -1,16 +1,18 @@
 import json
 from pathlib import Path
 
-try:
-    from Settings.Logger import log_error, log_info
-except ImportError:
-    from Logger import log_error, log_info
+from Application.ui.Settings.Logger import log_error, log_info
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ASSETS_DIR = PROJECT_ROOT / "Assets"
 CONFIG_PATH = Path.home() / ".config" / "Titans-launcher" / "profiles.json"
-DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
-CONTROLLER_INPUTS_DIR = PROJECT_ROOT / "Settings" / "Inputs"
+DEFAULT_VIDEO_PATH = ASSETS_DIR / "Videos" / "background.mp4"
+CONTROLLER_INPUTS_DIR = ASSETS_DIR / "Inputs"
+DEFAULT_APP_ICONS = {
+    "Youtube": str(ASSETS_DIR / "Icons" / "youtube.svg"),
+    "Google TV": str(ASSETS_DIR / "Icons" / "google-tv.png"),
+}
 DEFAULT_CONTROLLER_BINDINGS = {
     "up": ["hat:up", "axis:1:negative"],
     "down": ["hat:down", "axis:1:positive"],
@@ -66,7 +68,7 @@ DEFAULT_CONFIG = {
         "manage_antimicrox": True,
         "profile": "",
         "controller_close_enabled": False,
-        "icon_path": "",
+        "icon_path": DEFAULT_APP_ICONS["Youtube"],
     },
     "Google TV": {
         "command": "firefox",
@@ -76,7 +78,7 @@ DEFAULT_CONFIG = {
         "manage_antimicrox": True,
         "profile": "",
         "controller_close_enabled": False,
-        "icon_path": "",
+        "icon_path": DEFAULT_APP_ICONS["Google TV"],
     },
 }
 
@@ -114,6 +116,8 @@ def load_config():
         for key, value in data.items():
             if not key.startswith("_") and isinstance(value, dict):
                 value.setdefault("arguments", "")
+                if key in DEFAULT_APP_ICONS and not value.get("icon_path"):
+                    value["icon_path"] = DEFAULT_APP_ICONS[key]
         log_info(f"Loaded configuration successfully from {CONFIG_PATH}")
         return data
     except Exception as error:

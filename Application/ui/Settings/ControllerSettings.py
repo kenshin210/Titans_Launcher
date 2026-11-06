@@ -8,7 +8,9 @@ from PyQt6.QtWidgets import (
     QInputDialog, QVBoxLayout, QWidget
 )
 
-INPUTS_DIR = Path(__file__).resolve().parent / "Inputs"
+from Application.core.config import CONTROLLER_INPUTS_DIR
+
+INPUTS_DIR = CONTROLLER_INPUTS_DIR
 DEFAULT_BINDINGS = {
     "up": ["hat:up", "axis:1:negative"],
     "down": ["hat:down", "axis:1:positive"],

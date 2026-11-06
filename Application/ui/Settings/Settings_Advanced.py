@@ -13,20 +13,21 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QProcess, QTimer
 from PyQt6.QtGui import QIcon
 
-try:
-    from Settings.Logger import logger, LOG_FILE, log_info, log_warning, log_error, log_critical
-    from Settings.ControllerSettings import ControllerSettingsWidget
-    AboutDeviceWidget = import_module(
-        "Settings.About Device.AboutDeviceSettings"
-    ).AboutDeviceWidget
-except ImportError:
-    from Logger import logger, LOG_FILE, log_info, log_warning, log_error, log_critical
-    from ControllerSettings import ControllerSettingsWidget
-    AboutDeviceWidget = import_module(
-        "About Device.AboutDeviceSettings"
-    ).AboutDeviceWidget
+from Application.core.config import DEFAULT_VIDEO_PATH
+from Application.core.time_sync import fetch_ntp_time
+from Application.ui.Settings.Logger import (
+    LOG_FILE,
+    logger,
+    log_critical,
+    log_error,
+    log_info,
+    log_warning,
+)
+from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
 
-DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
+AboutDeviceWidget = import_module(
+    "Application.ui.Settings.About Device.AboutDeviceSettings"
+).AboutDeviceWidget
 
 class MenuNavButton(QPushButton):
     def __init__(self, text, parent=None):
@@ -371,10 +372,7 @@ class AdvancedSettingsWidget(QWidget):
         layout.addLayout(app_btn_layout)
 
         def add_application():
-            try:
-                from Launcher import ApplicationEditorDialog
-            except ImportError:
-                from launcher import ApplicationEditorDialog
+            from Application.ui.dialogs.app_editor import ApplicationEditorDialog
             editor = ApplicationEditorDialog(self.dialog or self.launcher)
             if editor.exec() == 1:
                 name, data = editor.get_data()
@@ -392,10 +390,7 @@ class AdvancedSettingsWidget(QWidget):
             old_name = current_item.text()
             data = self.launcher.config.get(old_name, {})
 
-            try:
-                from Launcher import ApplicationEditorDialog
-            except ImportError:
-                from launcher import ApplicationEditorDialog
+            from Application.ui.dialogs.app_editor import ApplicationEditorDialog
             editor = ApplicationEditorDialog(
                 self.dialog or self.launcher,
                 title=old_name,
@@ -735,10 +730,6 @@ class AdvancedSettingsWidget(QWidget):
             self.launcher.save_config_file()
             log_info(f"Advanced Settings: Updated NTP server='{self.launcher.config['_ntp_server']}', country='{self.launcher.config['_ntp_country']}', offset={self.launcher.config['_ntp_offset']}")
 
-            try:
-                from Launcher import fetch_ntp_time
-            except ImportError:
-                from launcher import fetch_ntp_time
             def immediate_fetch():
                 t = fetch_ntp_time(self.launcher.config["_ntp_server"], self.launcher.config["_ntp_offset"])
                 if t:

@@ -12,12 +12,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QColor, QPainter, QPen
 
-try:
-    from Settings.Logger import log_warning
-    device_styles = import_module("Settings.About Device.DeviceStyles")
-except ImportError:
-    from Logger import log_warning
-    device_styles = import_module("About Device.DeviceStyles")
+from Application.ui.Settings.Logger import log_warning
+
+device_styles = import_module("Application.ui.Settings.About Device.DeviceStyles")
 
 create_device_page_title = device_styles.create_device_page_title
 style_device_page = device_styles.style_device_page
