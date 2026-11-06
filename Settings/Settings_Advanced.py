@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
 from datetime import datetime, timezone
+from importlib import import_module
 import json
 import threading
 from PyQt6.QtWidgets import (
@@ -9,31 +10,34 @@ from PyQt6.QtWidgets import (
     QListWidget, QComboBox, QCompleter, QLabel, QScrollArea,
     QTextEdit, QTabWidget
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QProcess, QTimer
+from PyQt6.QtCore import Qt, QProcess, QTimer
 from PyQt6.QtGui import QIcon
 
 try:
     from Settings.Logger import logger, LOG_FILE, log_info, log_warning, log_error, log_critical
     from Settings.ControllerSettings import ControllerSettingsWidget
+    AboutDeviceWidget = import_module(
+        "Settings.About Device.AboutDeviceSettings"
+    ).AboutDeviceWidget
 except ImportError:
     from Logger import logger, LOG_FILE, log_info, log_warning, log_error, log_critical
     from ControllerSettings import ControllerSettingsWidget
+    AboutDeviceWidget = import_module(
+        "About Device.AboutDeviceSettings"
+    ).AboutDeviceWidget
 
 DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
 
 class MenuNavButton(QPushButton):
-    focused = pyqtSignal()
-
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def focusInEvent(self, event):
-        super().focusInEvent(event)
-        self.focused.emit()
-
 class AdvancedSettingsWidget(QWidget):
-    def __init__(self, parent_launcher, dialog_instance=None, on_toggle_advanced=None):
+    def __init__(
+        self, parent_launcher, dialog_instance=None, on_toggle_advanced=None,
+        initial_section="general"
+    ):
         super().__init__()
         self.launcher = parent_launcher
         self.dialog = dialog_instance or parent_launcher
@@ -74,13 +78,17 @@ class AdvancedSettingsWidget(QWidget):
             ("🎨  Theme & Power", 4),
             ("🌐  NTP & Region", 5),
             ("📋  Logging", 6),
-            ("🎮  Controller", 7)
+            ("🎮  Controller", 7),
+            ("ℹ  About Device", 8)
+        ]
+        self.section_keys = [
+            "general", "background", "applications", "app_icons", "theme",
+            "ntp", "logging", "controller", "about_device"
         ]
 
         for label, idx in categories:
             btn = MenuNavButton(label)
             btn.clicked.connect(lambda checked, i=idx: self.switch_tab(i))
-            btn.focused.connect(lambda i=idx: self.switch_tab(i))
             sidebar_layout.addWidget(btn)
             self.nav_buttons.append(btn)
 
@@ -146,10 +154,15 @@ class AdvancedSettingsWidget(QWidget):
         self.pages.addWidget(self.create_ntp_page())
         self.pages.addWidget(self.create_logging_page())
         self.pages.addWidget(ControllerSettingsWidget(self.launcher))
+        self.pages.addWidget(AboutDeviceWidget(self.launcher))
 
         root_layout.addWidget(self.pages, stretch=1)
 
-        self.switch_tab(0)
+        initial_index = (
+            self.section_keys.index(initial_section)
+            if initial_section in self.section_keys else 0
+        )
+        self.switch_tab(initial_index)
 
     def handle_mode_toggle(self):
         if self.on_toggle_advanced:
@@ -157,6 +170,7 @@ class AdvancedSettingsWidget(QWidget):
 
     def switch_tab(self, index):
         self.pages.setCurrentIndex(index)
+        self.current_section = self.section_keys[index]
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         for i, btn in enumerate(self.nav_buttons):
             if i == index:
@@ -221,9 +235,9 @@ class AdvancedSettingsWidget(QWidget):
         target_tab.setCurrentIndex(target_index)
         return True
 
-    def focus_first_menu_item(self):
+    def focus_current_menu_item(self):
         if self.nav_buttons:
-            self.nav_buttons[0].setFocus()
+            self.nav_buttons[self.pages.currentIndex()].setFocus()
 
     # --- TAB 1: General ---
     def create_general_page(self):
@@ -388,7 +402,10 @@ class AdvancedSettingsWidget(QWidget):
                 command=data.get("command", ""),
                 arguments=data.get("arguments", ""),
                 manage_am=data.get("manage_antimicrox", False),
-                profile_path=data.get("profile", "")
+                profile_path=data.get("profile", ""),
+                controller_close_enabled=data.get("controller_close_enabled", False),
+                app_type=data.get("type", "application"),
+                website_url=data.get("website_url", "")
             )
             if editor.exec() == 1:
                 new_name, new_data = editor.get_data()
