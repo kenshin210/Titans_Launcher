@@ -1,0 +1,186 @@
+QWidget#msgCard {
+    background-color: rgba(22, 22, 22, 240);
+    border: 2px solid $theme_color;
+    border-radius: 14px;
+}
+
+QLabel#messageLabel {
+    color: #FFFFFF;
+    font-size: 16px;
+    font-weight: bold;
+    background: transparent;
+    border: none;
+}
+
+QPushButton#dialogPrimaryButton {
+    background-color: $theme_color;
+    color: #FFFFFF;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: none;
+}
+
+QPushButton#dialogPrimaryButton:hover,
+QPushButton#dialogPrimaryButton:focus {
+    background-color: rgba(255, 255, 255, 30);
+    border: 1px solid $theme_color;
+}
+
+QPushButton#dialogSecondaryButton {
+    background-color: rgba(45, 45, 45, 200);
+    color: #FFFFFF;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 10px 20px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 30);
+}
+
+QPushButton#dialogSecondaryButton:hover,
+QPushButton#dialogSecondaryButton:focus {
+    background-color: rgba(65, 65, 65, 220);
+    border: 1px solid rgba(255, 255, 255, 60);
+}
+
+QDialog#applicationEditorDialog {
+    background-color: #222222;
+    color: #FFFFFF;
+}
+
+QPushButton#applicationSaveButton {
+    background-color: $theme_color;
+    color: #FFFFFF;
+    padding: 8px;
+    font-weight: bold;
+}
+
+QLabel#launcherBackground {
+    background-color: #141414;
+}
+
+QWidget#contentWidget {
+    background-color: $background_color;
+}
+
+QWidget#homePage,
+QWidget#settingsPage {
+    background: transparent;
+}
+
+QMenu#powerMenu {
+    background-color: #222222;
+    color: #FFFFFF;
+    border: 1px solid rgba(255, 255, 255, 30);
+    padding: 6px;
+    font-size: 14px;
+}
+
+QMenu#powerMenu::item {
+    padding: 8px 24px;
+    border-radius: 4px;
+    background: transparent;
+}
+
+QMenu#powerMenu::item:selected {
+    background-color: $theme_color;
+    color: #FFFFFF;
+}
+
+QLabel#launcherTitle {
+    color: #FFFFFF;
+    font-size: 38px;
+    font-weight: bold;
+    background: transparent;
+}
+
+QLabel#launcherClock {
+    color: #AAAAAA;
+    font-size: 15px;
+    font-weight: bold;
+    background: transparent;
+}
+
+QPushButton#launcherBackButton {
+    background-color: rgba(35, 35, 35, 160);
+    color: #FFFFFF;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 10px 24px;
+    border-radius: 12px;
+    border: 2px solid rgba(255, 255, 255, 30);
+}
+
+QPushButton#launcherBackButton:hover,
+QPushButton#launcherBackButton:focus {
+    color: #FFFFFF;
+    background-color: rgba(60, 60, 60, 210);
+    border: 2px solid $theme_color;
+}
+
+QPushButton#launcherSettingsButton {
+    background-color: rgba(35, 35, 35, 140);
+    color: #FFFFFF;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 14px 28px;
+    border-radius: $border_radius;
+    border: 2px solid rgba(255, 255, 255, 25);
+}
+
+QPushButton#launcherSettingsButton:hover,
+QPushButton#launcherSettingsButton:focus {
+    color: #FFFFFF;
+    background-color: rgba(60, 60, 60, 200);
+    border: 3px solid $theme_color;
+}
+
+QToolButton#launcherPowerButton {
+    background-color: rgba(35, 35, 35, 140);
+    color: #FFFFFF;
+    font-size: 24px;
+    font-weight: bold;
+    border-radius: $border_radius;
+    border: 2px solid rgba(255, 255, 255, 25);
+}
+
+QToolButton#launcherPowerButton:hover,
+QToolButton#launcherPowerButton:focus {
+    color: #FFFFFF;
+    background-color: rgba(60, 60, 60, 200);
+    border: 3px solid $theme_color;
+}
+
+QToolButton#launcherPowerButton:pressed,
+QToolButton#launcherPowerButton:on,
+QToolButton#launcherPowerButton:checked {
+    background-color: rgba(35, 35, 35, 140);
+    border: 2px solid rgba(255, 255, 255, 25);
+}
+
+QToolButton#launcherPowerButton::menu-indicator {
+    width: 0px;
+}
+
+QToolButton#applicationTile {
+    background-color: rgba(35, 35, 35, 140);
+    color: #FFFFFF;
+    font-size: 18px;
+    font-weight: bold;
+    border-radius: $border_radius;
+    border: 2px solid rgba(255, 255, 255, 25);
+    padding-top: 28px;
+    padding-bottom: 15px;
+}
+
+QToolButton#applicationTile:hover,
+QToolButton#applicationTile:focus {
+    background-color: rgba(60, 60, 60, 200);
+    border: 3px solid $theme_color;
+}
+
+QLabel#transitionProxy {
+    background: transparent;
+    border: none;
+}
