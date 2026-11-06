@@ -1,35 +1,39 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
+from importlib import import_module
 import json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
     QPushButton, QCheckBox, QFileDialog, QMessageBox, QStackedWidget,
     QListWidget, QComboBox, QCompleter, QLabel, QScrollArea
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt
 
 try:
     from Settings.Logger import log_info, log_warning, log_error
     from Settings.ControllerSettings import ControllerSettingsWidget
+    AboutDeviceWidget = import_module(
+        "Settings.About Device.AboutDeviceSettings"
+    ).AboutDeviceWidget
 except ImportError:
     from Logger import log_info, log_warning, log_error
     from ControllerSettings import ControllerSettingsWidget
+    AboutDeviceWidget = import_module(
+        "About Device.AboutDeviceSettings"
+    ).AboutDeviceWidget
 
 DEFAULT_VIDEO_PATH = Path.home() / ".config" / "Titans-launcher" / "background.mp4"
 
 class MenuNavButton(QPushButton):
-    focused = pyqtSignal()
-
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def focusInEvent(self, event):
-        super().focusInEvent(event)
-        self.focused.emit()
-
 class BasicSettingsWidget(QWidget):
-    def __init__(self, parent_launcher, dialog_instance=None, on_toggle_advanced=None):
+    def __init__(
+        self, parent_launcher, dialog_instance=None, on_toggle_advanced=None,
+        initial_section="general"
+    ):
         super().__init__()
         self.launcher = parent_launcher
         self.dialog = dialog_instance or parent_launcher
@@ -67,13 +71,16 @@ class BasicSettingsWidget(QWidget):
             ("🖼  Background", 1),
             ("🚀  Applications", 2),
             ("🎨  Theme", 3),
-            ("🎮  Controller", 4)
+            ("🎮  Controller", 4),
+            ("ℹ  About Device", 5)
+        ]
+        self.section_keys = [
+            "general", "background", "applications", "theme", "controller", "about_device"
         ]
 
         for label, idx in categories:
             btn = MenuNavButton(label)
             btn.clicked.connect(lambda checked, i=idx: self.switch_tab(i))
-            btn.focused.connect(lambda i=idx: self.switch_tab(i))
             sidebar_layout.addWidget(btn)
             self.nav_buttons.append(btn)
 
@@ -136,10 +143,15 @@ class BasicSettingsWidget(QWidget):
         self.pages.addWidget(self.create_apps_page())
         self.pages.addWidget(self.create_theme_page())
         self.pages.addWidget(ControllerSettingsWidget(self.launcher))
+        self.pages.addWidget(AboutDeviceWidget(self.launcher))
 
         root_layout.addWidget(self.pages, stretch=1)
 
-        self.switch_tab(0)
+        initial_index = (
+            self.section_keys.index(initial_section)
+            if initial_section in self.section_keys else 0
+        )
+        self.switch_tab(initial_index)
 
     def handle_mode_toggle(self):
         if self.on_toggle_advanced:
@@ -148,6 +160,7 @@ class BasicSettingsWidget(QWidget):
 
     def switch_tab(self, index):
         self.pages.setCurrentIndex(index)
+        self.current_section = self.section_keys[index]
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         for i, btn in enumerate(self.nav_buttons):
             if i == index:
@@ -189,9 +202,9 @@ class BasicSettingsWidget(QWidget):
         self.nav_buttons[next_index].setFocus()
         self.switch_tab(next_index)
 
-    def focus_first_menu_item(self):
+    def focus_current_menu_item(self):
         if self.nav_buttons:
-            self.nav_buttons[0].setFocus()
+            self.nav_buttons[self.pages.currentIndex()].setFocus()
 
     # --- TAB 1: General ---
     def create_general_page(self):
