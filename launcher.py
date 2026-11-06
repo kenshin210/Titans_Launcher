@@ -612,6 +612,7 @@ class MainApp(QWidget):
         self.controller_back_suppressed_until = 0.0
         self.reload_controller_profile()
         self.cap = None
+        self.background_video_active = False
         self.current_ntp_time = datetime.now()
 
         self.app_finished_signal.connect(self.on_app_finished)
@@ -810,7 +811,7 @@ class MainApp(QWidget):
         self.content_widget = QWidget(self)
         self.content_widget.setObjectName("contentWidget")
         self.content_widget.setGeometry(self.rect())
-        self.content_widget.setStyleSheet("QWidget#contentWidget { background-color: rgba(20, 20, 20, 160); }")
+        self.update_content_background()
         self.content_widget.show()
 
         root_layout = QVBoxLayout(self.content_widget)
@@ -1143,11 +1144,13 @@ class MainApp(QWidget):
             self.video_timer.stop()
         if self.cap:
             self.cap.release()
+        self.background_video_active = False
 
         video_path = Path(self.config.get("_background_path", str(DEFAULT_VIDEO_PATH)))
         if video_path.exists():
             self.cap = cv2.VideoCapture(str(video_path))
             if self.cap.isOpened():
+                self.background_video_active = True
                 log_info(f"Background video opened successfully: {video_path}")
                 self.video_timer = QTimer(self)
                 self.video_timer.timeout.connect(self.update_video_frame)
@@ -1156,6 +1159,19 @@ class MainApp(QWidget):
                 log_error(f"Failed to open background video file (codec or format error): {video_path}")
         else:
             log_warning(f"Background video file not found at: {video_path}")
+        self.update_content_background()
+
+    def update_content_background(self):
+        if not hasattr(self, "content_widget"):
+            return
+        background_color = (
+            "rgba(20, 20, 20, 160)"
+            if self.background_video_active else "#141414"
+        )
+        self.content_widget.setStyleSheet(
+            f"QWidget#contentWidget {{ background-color: {background_color}; }}"
+        )
+        self.content_widget.update()
 
     def update_video_frame(self):
         if self.cap and self.cap.isOpened():
@@ -1164,6 +1180,9 @@ class MainApp(QWidget):
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = self.cap.read()
             if ret:
+                if not self.background_video_active:
+                    self.background_video_active = True
+                    self.update_content_background()
                 if self.width() > 0 and self.height() > 0:
                     frame = cv2.resize(frame, (self.width(), self.height()))
 
@@ -1171,6 +1190,9 @@ class MainApp(QWidget):
                 h, w, ch = frame.shape
                 qt_image = QImage(frame.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
                 self.bg_label.setPixmap(QPixmap.fromImage(qt_image))
+            elif self.background_video_active:
+                self.background_video_active = False
+                self.update_content_background()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1496,6 +1518,8 @@ class MainApp(QWidget):
 
         def on_disintegrate_done():
             for p in proxies:
+                p.hide()
+                p.clear()
                 p.deleteLater()
 
             def start_expand_settings():
@@ -1545,8 +1569,12 @@ class MainApp(QWidget):
                 def on_expand_done():
                     self.stacked_widget.setVisible(True)
                     self.settings_page.show()
-                    QTimer.singleShot(25, settings_proxy.deleteLater)
+                    settings_proxy.hide()
+                    settings_proxy.clear()
+                    settings_proxy.deleteLater()
                     self.is_animating = False
+                    self.update()
+                    self.stacked_widget.update()
                     if hasattr(self, 'current_settings_widget') and hasattr(self.current_settings_widget, 'focus_current_menu_item'):
                         self.current_settings_widget.focus_current_menu_item()
                     elif hasattr(self, 'back_btn'):
@@ -1556,7 +1584,7 @@ class MainApp(QWidget):
                 self._active_anim = expand_group
                 expand_group.start()
 
-            QTimer.singleShot(250, start_expand_settings)
+            start_expand_settings()
 
         disintegrate_group.finished.connect(on_disintegrate_done)
         self._active_anim = disintegrate_group
@@ -1605,6 +1633,8 @@ class MainApp(QWidget):
         collapse_group.addAnimation(anim_s_op)
 
         def on_collapse_done():
+            settings_proxy.hide()
+            settings_proxy.clear()
             settings_proxy.deleteLater()
 
             def start_restore_home():
@@ -1652,14 +1682,18 @@ class MainApp(QWidget):
                 def on_restore_done():
                     self.stacked_widget.setVisible(True)
                     self.home_page.show()
-                    QTimer.singleShot(25, home_proxy.deleteLater)
+                    home_proxy.hide()
+                    home_proxy.clear()
+                    home_proxy.deleteLater()
                     self.is_animating = False
+                    self.update()
+                    self.stacked_widget.update()
 
                 restore_group.finished.connect(on_restore_done)
                 self._active_anim = restore_group
                 restore_group.start()
 
-            QTimer.singleShot(250, start_restore_home)
+            start_restore_home()
 
         collapse_group.finished.connect(on_collapse_done)
         self._active_anim = collapse_group
