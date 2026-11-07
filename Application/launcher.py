@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 import sys
 import subprocess
 import threading
@@ -11,7 +12,7 @@ import cv2
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QLabel,
     QDialog, QMessageBox, QToolButton, QMenu,
-    QStackedWidget, QGraphicsOpacityEffect
+    QStackedWidget, QGraphicsOpacityEffect, QTabWidget
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QSize, QPropertyAnimation, QEasingCurve, QRect,
@@ -44,8 +45,13 @@ from .core.controller import (
     load_controller_bindings,
     map_raw_input,
 )
+from .core.proxy import proxy_environment
 from .core.sound import NavigationSoundPlayer
 from .core.time_sync import fetch_ntp_time, start_ntp_sync_thread
+from .core.weather import fetch_current_weather
+from .ui.InstallApps import AppsHubWidget
+from .ui.Settings.tab_style import tab_widget_stylesheet
+from .ui.Settings.AsyncTask import TaskRunnerMixin
 from .ui.controller_navigation import (
     handle_focused_widget_input,
     handle_modal_input,
@@ -56,7 +62,7 @@ from .ui.dialogs.themed_message_box import ThemedMessageBox
 from .ui.widgets.animated_button import AnimatedLauncherButton
 from .ui.widgets.battery_indicator import BatteryIndicator
 
-class MainApp(QWidget):
+class MainApp(QWidget, TaskRunnerMixin):
     app_finished_signal = pyqtSignal()
 
     def __init__(self):
@@ -138,9 +144,11 @@ class MainApp(QWidget):
                 self.focusPreviousChild()
         elif action in ("previous_tab", "next_tab"):
             settings_widget = getattr(self, "current_settings_widget", None)
+            direction = -1 if action == "previous_tab" else 1
             if self.stacked_widget.currentWidget() == self.settings_page and settings_widget:
-                direction = -1 if action == "previous_tab" else 1
                 settings_widget.navigate_embedded_tabs(direction)
+            elif self.stacked_widget.currentWidget() == self.home_page and self.applications_module_enabled():
+                self.home_tabs.setCurrentIndex((self.home_tabs.currentIndex() + direction) % self.home_tabs.count())
         elif action == "select":
             focused = QApplication.focusWidget()
             if isinstance(focused, (QPushButton, QToolButton, AnimatedLauncherButton)):
@@ -209,6 +217,17 @@ class MainApp(QWidget):
             self.power_menu.close()
         return True
 
+    def applications_module_enabled(self):
+        return bool(self.config.get("_module_applications", False))
+
+    def apply_applications_module(self):
+        """Show the Home / Applications tabs only while the Applications module is enabled."""
+        enabled = self.applications_module_enabled()
+        self.home_tabs.setTabVisible(1, enabled)
+        self.home_tabs.tabBar().setVisible(enabled)
+        if not enabled:
+            self.home_tabs.setCurrentIndex(0)
+
     def save_config_file(self):
         save_config(self.config)
 
@@ -256,7 +275,27 @@ class MainApp(QWidget):
         self.home_page = QWidget()
         self.home_page.setObjectName("homePage")
         self.home_page.setStyleSheet(load_stylesheet())
-        self.main_layout = QVBoxLayout(self.home_page)
+        home_page_layout = QVBoxLayout(self.home_page)
+        home_page_layout.setContentsMargins(0, 0, 0, 0)
+
+        # "Home" keeps the original launcher view; "Applications" browses the pacman repositories.
+        self.home_tabs = QTabWidget()
+        self.home_tabs.setObjectName("homeTabs")
+        self.home_tabs.setStyleSheet(
+            tab_widget_stylesheet(self.get_theme_color())
+            + "QTabWidget#homeTabs::pane { background: transparent; border: none; }"
+            + "QTabWidget#homeTabs::tab-bar { alignment: center; }"
+        )
+        self.home_tab = QWidget()
+        self.home_tab.setObjectName("homeTab")
+        self.home_tab.setStyleSheet(load_stylesheet())
+        self.home_tabs.addTab(self.home_tab, "Home")
+        self.install_apps_widget = AppsHubWidget(self)
+        self.home_tabs.addTab(self.install_apps_widget, "Applications")
+        home_page_layout.addWidget(self.home_tabs)
+        self.apply_applications_module()
+
+        self.main_layout = QVBoxLayout(self.home_tab)
         self.main_layout.setContentsMargins(40, 40, 40, 40)
 
         top_layout = QHBoxLayout()
@@ -309,17 +348,40 @@ class MainApp(QWidget):
 
         bottom_layout = QHBoxLayout()
 
-        self.clock_label = QLabel("Loading Time...")
-        self.clock_label.setObjectName("launcherClock")
-        self.clock_label.setStyleSheet(load_stylesheet())
-        bottom_layout.addWidget(self.clock_label, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+        # Flat buttons keep the text looking like plain labels while staying clickable and focusable.
+        flat_style = (
+            "QPushButton {"
+            "background: transparent; border: none; padding: 0px;"
+            "color: #AAAAAA; font-size: 15px; font-weight: bold; text-align: left;"
+            "}"
+            "QPushButton:hover, QPushButton:focus { color: #FFFFFF; }"
+        )
 
-        bottom_layout.addStretch()
+        self.weather_label = QPushButton("Current weather\nSet a city and country in Settings > Weather")
+        self.weather_label.setObjectName("launcherWeather")
+        self.weather_label.setFlat(True)
+        self.weather_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.weather_label.setStyleSheet(flat_style)
+        self.weather_label.clicked.connect(lambda: self.show_settings_page("weather"))
+
+        self.clock_label = QPushButton("Loading Time...")
+        self.clock_label.setObjectName("launcherClock")
+        self.clock_label.setFlat(True)
+        self.clock_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clock_label.setStyleSheet(flat_style)
+        self.clock_label.clicked.connect(lambda: self.show_settings_page("ntp"))
+
+        date_time_layout = QVBoxLayout()
+        date_time_layout.setSpacing(8)
+        date_time_layout.addWidget(self.weather_label)
+        date_time_layout.addWidget(self.clock_label)
+        bottom_layout.addLayout(date_time_layout)
 
         self.config_btn = QPushButton("⚙ Settings")
         self.config_btn.setObjectName("launcherSettingsButton")
         self.update_settings_button_style()
         self.config_btn.clicked.connect(self.show_settings_page)
+        bottom_layout.addStretch()
         bottom_layout.addWidget(self.config_btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
         self.apps_layout = QHBoxLayout()
@@ -352,6 +414,11 @@ class MainApp(QWidget):
         self.clock_timer.timeout.connect(self.update_clock_display)
         self.clock_timer.start(1000)
 
+        self.weather_timer = QTimer(self)
+        self.weather_timer.timeout.connect(self.refresh_weather)
+        self.weather_timer.start(30 * 60 * 1000)
+        self.refresh_weather()
+
     def exit_launcher(self):
         theme_color = self.get_theme_color()
         dialog = ThemedMessageBox(
@@ -378,6 +445,8 @@ class MainApp(QWidget):
     def closeEvent(self, event):
         if hasattr(self, "clock_timer"):
             self.clock_timer.stop()
+        if hasattr(self, "weather_timer"):
+            self.weather_timer.stop()
         if hasattr(self, "video_timer"):
             self.video_timer.stop()
         if self.cap:
@@ -484,6 +553,42 @@ class MainApp(QWidget):
 
         formatted_time = f"{self.current_ntp_time.strftime('%A, %d %B %Y')}  –  {time_str} ({country})"
         self.clock_label.setText(formatted_time)
+
+    def refresh_weather(self):
+        city = self.config.get("_weather_city", "").strip()
+        country = self.config.get("_weather_country", "").strip()
+        if not city and not country:
+            self.weather_label.setText(
+                "Current weather\nSet a city and country in Settings > Weather"
+            )
+            return
+        if not city or not country:
+            self.weather_label.setText("Current weather\nComplete your location in Settings > Weather")
+            return
+
+        temperature_unit = self.config.get("_weather_temperature_unit", "Celsius")
+        self.weather_label.setText(f"Current weather\nLoading {city}, {country}...")
+
+        def update_weather(result):
+            if isinstance(result, Exception):
+                log_warning(f"Weather lookup failed for {city}, {country}.", details=str(result))
+                self.weather_label.setText(f"Current weather unavailable\n{city}, {country}")
+                return
+
+            feels_like = (
+                f" · Feels like {result['feels_like']}{result['unit']}"
+                if result["feels_like"] is not None else ""
+            )
+            self.weather_label.setText(
+                f"{result['icon']} {result['temperature']}{result['unit']} · "
+                f"{result['description']}{feels_like}\n"
+                f"{result['city']}, {result['country']}"
+            )
+
+        self.run_async(
+            lambda: fetch_current_weather(city, country, temperature_unit),
+            update_weather,
+        )
 
     def get_theme_color(self):
         theme = self.config.get("_theme", "Crimson Red")
@@ -730,7 +835,7 @@ class MainApp(QWidget):
 
         try:
             log_info(f"Spawning application process: {' '.join(cmd_list)}")
-            proc = subprocess.Popen(cmd_list)
+            proc = subprocess.Popen(cmd_list, env={**os.environ, **proxy_environment(self.config)})
             self.active_app_process = proc
             self.active_app_controller_close_enabled = controller_close_enabled
             log_info(f"Application '{executable}' running (PID: {proc.pid})")
@@ -772,9 +877,12 @@ class MainApp(QWidget):
         self.update_clock_display()
         self.init_video_background()
 
-    def show_settings_page(self):
+    def show_settings_page(self, section=None):
         if getattr(self, 'is_animating', False):
             return
+
+        # The clicked-signal's bool argument is not a section name.
+        self._pending_settings_section = section if isinstance(section, str) else None
 
         log_info("Opening Settings view.")
         enable_anim = self.config.get("_enable_animations", True)
@@ -827,6 +935,8 @@ class MainApp(QWidget):
 
         if hasattr(self, 'clock_label') and self.clock_label.isVisible():
             home_widgets.append(self.clock_label)
+        if hasattr(self, 'weather_label') and self.weather_label.isVisible():
+            home_widgets.append(self.weather_label)
         if hasattr(self, 'config_btn') and self.config_btn.isVisible():
             home_widgets.append(self.config_btn)
 
@@ -1069,6 +1179,13 @@ class MainApp(QWidget):
     def build_settings_view(self, is_advanced):
         selected_section = getattr(self, "current_settings_widget", None)
         selected_section = getattr(selected_section, "current_section", "general")
+        requested_section = getattr(self, "_pending_settings_section", None)
+        self._pending_settings_section = None
+        if requested_section:
+            selected_section = requested_section
+            # Date/time (NTP) settings only exist in the Advanced menu.
+            if requested_section == "ntp":
+                is_advanced = True
 
         while self.settings_container.count():
             item = self.settings_container.takeAt(0)

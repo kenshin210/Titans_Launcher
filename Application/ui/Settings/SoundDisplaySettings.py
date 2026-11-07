@@ -13,14 +13,27 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from Application.styles import load_stylesheet
+from Application.ui.Settings.tab_style import tab_widget_stylesheet
 
 
 class SoundDisplaySettingsWidget(QWidget):
+    COLOR_FORMATS = (
+        ("RGB", "rgb"),
+        ("YUV / YCbCr 4:4:4", "ycbcr444"),
+        ("YUV / YCbCr 4:2:2", "ycbcr422"),
+        ("YUV / YCbCr 4:2:0", "ycbcr420"),
+    )
+    EXTRA_DISPLAY_CONTROLS = (
+        "overscan_spin", "bit_depth_combo", "color_accuracy_combo", "color_format_combo",
+    )
+
     def __init__(self, launcher):
         super().__init__()
         self.launcher = launcher
@@ -30,36 +43,51 @@ class SoundDisplaySettingsWidget(QWidget):
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
+        tabs = QTabWidget()
+        tabs.setStyleSheet(tab_widget_stylesheet(launcher.get_theme_color()))
+        tabs.addTab(
+            self._build_page(
+                "Display",
+                "Configure KDE Wayland display settings. Controls are enabled only when the system reports support.",
+                [self._build_display_card(), self._build_cec_card()],
+            ),
+            "Display",
+        )
+        tabs.addTab(
+            self._build_page(
+                "Sound",
+                "Configure available PipeWire audio settings. Controls are enabled only when the system reports support.",
+                [self._build_audio_card()],
+            ),
+            "Sound",
+        )
+        root_layout.addWidget(tabs)
+
+        self.refresh_all()
+
+    @staticmethod
+    def _build_page(title_text, description_text, cards):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setStyleSheet("background: transparent; border: none;")
-
         content = QWidget()
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 0, 10, 0)
         content_layout.setSpacing(12)
         scroll.setWidget(content)
-        root_layout.addWidget(scroll)
 
-        title = QLabel("Display & Sound")
+        title = QLabel(title_text)
         title.setObjectName("soundDisplayTitle")
         content_layout.addWidget(title)
-
-        description = QLabel(
-            "Configure available PipeWire audio and KDE Wayland display settings. "
-            "Controls are enabled only when the system reports support."
-        )
+        description = QLabel(description_text)
         description.setObjectName("soundDisplayDescription")
         description.setWordWrap(True)
         content_layout.addWidget(description)
-
-        content_layout.addWidget(self._build_audio_card())
-        content_layout.addWidget(self._build_display_card())
-        content_layout.addWidget(self._build_cec_card())
+        for card in cards:
+            content_layout.addWidget(card)
         content_layout.addStretch()
-
-        self.refresh_all()
+        return scroll
 
     @staticmethod
     def _run(command, timeout=4, input_text=None):
@@ -164,6 +192,31 @@ class SoundDisplaySettingsWidget(QWidget):
         self.color_range_combo.setObjectName("soundDisplayControl")
         self.color_range_combo.addItems(["Automatic", "Full", "Limited"])
         form.addRow("Color range:", self.color_range_combo)
+
+        self.overscan_spin = QSpinBox()
+        self.overscan_spin.setRange(0, 100)
+        self.overscan_spin.setSuffix(" %")
+        self.overscan_spin.setObjectName("soundDisplayControl")
+        form.addRow("Overscan:", self.overscan_spin)
+
+        self.bit_depth_combo = QComboBox()
+        self.bit_depth_combo.setObjectName("soundDisplayControl")
+        self.bit_depth_combo.addItem("Automatic", None)
+        for bpc in ("8", "10", "12"):
+            self.bit_depth_combo.addItem(f"{bpc}-bit", bpc)
+        form.addRow("Bit depth:", self.bit_depth_combo)
+
+        self.color_accuracy_combo = QComboBox()
+        self.color_accuracy_combo.setObjectName("soundDisplayControl")
+        self.color_accuracy_combo.addItem("Efficiency", "efficiency")
+        self.color_accuracy_combo.addItem("Accuracy", "accuracy")
+        form.addRow("Colour accuracy:", self.color_accuracy_combo)
+
+        self.color_format_combo = QComboBox()
+        self.color_format_combo.setObjectName("soundDisplayControl")
+        for label, value in self.COLOR_FORMATS:
+            self.color_format_combo.addItem(label, value)
+        form.addRow("Colour profile:", self.color_format_combo)
         layout.addLayout(form)
 
         self.vsync_status = QLabel(
@@ -311,22 +364,14 @@ class SoundDisplaySettingsWidget(QWidget):
         if not kscreen_doctor:
             self.display_status.setText("KDE display controls unavailable: kscreen-doctor was not found.")
             self.display_combo.setEnabled(False)
-            self.mode_combo.setEnabled(False)
-            self.scale_combo.setEnabled(False)
-            self.hdr_checkbox.setEnabled(False)
-            self.color_range_combo.setEnabled(False)
-            self.display_apply_button.setEnabled(False)
+            self._disable_display_controls()
             return
 
         result = self._run([kscreen_doctor, "-o"])
         if not self._is_success(result):
             self.display_status.setText("Could not query displays with kscreen-doctor.")
             self.display_combo.setEnabled(False)
-            self.mode_combo.setEnabled(False)
-            self.scale_combo.setEnabled(False)
-            self.hdr_checkbox.setEnabled(False)
-            self.color_range_combo.setEnabled(False)
-            self.display_apply_button.setEnabled(False)
+            self._disable_display_controls()
             return
 
         # kscreen-doctor emits ANSI color codes even when piped.
@@ -367,6 +412,7 @@ class SoundDisplaySettingsWidget(QWidget):
                 "hdr_line": hdr_line,
                 "color_range": color_match.group(1) if color_match else None,
                 "vrr_line": vrr_line,
+                "extra": self._parse_extra(lines),
             }
             self.display_combo.addItem(f"{connector} ({output_id})", connector)
 
@@ -376,15 +422,60 @@ class SoundDisplaySettingsWidget(QWidget):
         if not display_available:
             self.display_status.setText("No connected displays were reported by KScreen.")
 
+    def _disable_display_controls(self):
+        for control in (
+            self.mode_combo, self.scale_combo, self.hdr_checkbox, self.color_range_combo,
+            self.display_apply_button, *(getattr(self, name) for name in self.EXTRA_DISPLAY_CONTROLS),
+        ):
+            control.setEnabled(False)
+
+    @staticmethod
+    def _parse_extra(lines):
+        """Overscan, bit depth, colour accuracy and colour format as reported by KScreen."""
+        text = "\n".join(lines)
+
+        def find(pattern):
+            match = re.search(pattern, text, re.IGNORECASE)
+            return match.group(1) if match else None
+
+        color_format = find(r"colou?r\s*format:\s*([^\n]+)")
+        if color_format:
+            color_format = re.sub(r"[^a-z0-9]", "", color_format.lower())
+        return {
+            "overscan": find(r"overscan:\s*(\d+)"),
+            "max_bpc": find(r"max\s*bpc:\s*(\d+)"),
+            "tradeoff": (find(r"power\s*tradeoff:\s*(\w+)") or "").lower() or None,
+            "color_format": color_format,
+        }
+
+    def _sync_extra_controls(self, extra):
+        def sync(control, value, setter, tip):
+            control.setEnabled(value is not None)
+            control.setToolTip("" if value is not None else tip)
+            if value is not None:
+                control.blockSignals(True)
+                setter(value)
+                control.blockSignals(False)
+
+        unsupported = "Not reported by KScreen for this display."
+        sync(self.overscan_spin, extra["overscan"], lambda v: self.overscan_spin.setValue(int(v)), unsupported)
+
+        def set_data(combo):
+            def setter(value):
+                index = combo.findData(value)
+                if index >= 0:
+                    combo.setCurrentIndex(index)
+            return setter
+
+        sync(self.bit_depth_combo, extra["max_bpc"], set_data(self.bit_depth_combo), unsupported)
+        sync(self.color_accuracy_combo, extra["tradeoff"], set_data(self.color_accuracy_combo), unsupported)
+        sync(self.color_format_combo, extra["color_format"], set_data(self.color_format_combo), unsupported)
+
     def update_display_controls(self, _index):
         connector = self.display_combo.currentData()
         output = self.display_outputs.get(connector)
         if not output:
-            self.mode_combo.setEnabled(False)
-            self.scale_combo.setEnabled(False)
-            self.hdr_checkbox.setEnabled(False)
-            self.color_range_combo.setEnabled(False)
-            self.display_apply_button.setEnabled(False)
+            self._disable_display_controls()
             return
 
         self.mode_combo.clear()
@@ -422,6 +513,8 @@ class SoundDisplaySettingsWidget(QWidget):
                 self.color_range_combo.addItem(color_range)
             self.color_range_combo.setCurrentText(color_range)
 
+        self._sync_extra_controls(output["extra"])
+
         vrr_text = output["vrr_line"].strip()
         self.vsync_status.setText(
             f"Adaptive sync (VRR): {vrr_text.split(':', 1)[1].strip()}"
@@ -450,6 +543,16 @@ class SoundDisplaySettingsWidget(QWidget):
             commands.append(f"{prefix}.hdr.{ 'enable' if self.hdr_checkbox.isChecked() else 'disable' }")
         if output["color_range"] is not None:
             commands.append(f"{prefix}.rgbRange.{self.color_range_combo.currentText().lower()}")
+
+        extra = output["extra"]
+        if self.overscan_spin.isEnabled():
+            commands.append(f"{prefix}.overscan.{self.overscan_spin.value()}")
+        if self.bit_depth_combo.isEnabled() and self.bit_depth_combo.currentData():
+            commands.append(f"{prefix}.maxBpc.{self.bit_depth_combo.currentData()}")
+        if self.color_accuracy_combo.isEnabled():
+            commands.append(f"{prefix}.colorPowerTradeoff.{self.color_accuracy_combo.currentData()}")
+        if self.color_format_combo.isEnabled() and self.color_format_combo.currentData() != extra["color_format"]:
+            commands.append(f"{prefix}.colorFormat.{self.color_format_combo.currentData()}")
 
         for command in commands:
             result = self._run([kscreen_doctor, command])

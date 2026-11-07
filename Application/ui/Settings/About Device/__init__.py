@@ -1,1 +1,0 @@
-"""About Device settings pages."""

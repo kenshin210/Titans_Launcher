@@ -2,8 +2,6 @@ from PyQt6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from Application.ui.Settings.tab_style import tab_widget_stylesheet
 from Application.ui.Settings.TaskManager.ApplicationsTab import ApplicationsTab
-from Application.ui.Settings.TaskManager.NetworkTab import NetworkTab
-from Application.ui.Settings.TaskManager.Overview import OverviewWidget
 
 
 class TaskManagerWidget(QWidget):
@@ -18,6 +16,5 @@ class TaskManagerWidget(QWidget):
         self.tabs.setStyleSheet(tab_widget_stylesheet(theme_color))
         root_layout.addWidget(self.tabs)
 
-        self.tabs.addTab(OverviewWidget(launcher), "Overview")
+        # The Overview and Network tabs are intentionally hidden from the Task Manager.
         self.tabs.addTab(ApplicationsTab(launcher), "Applications")
-        self.tabs.addTab(NetworkTab(launcher), "Network")

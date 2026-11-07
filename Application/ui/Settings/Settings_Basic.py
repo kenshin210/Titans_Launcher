@@ -15,10 +15,10 @@ from Application.core.config import DEFAULT_VIDEO_PATH
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
 from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
 from Application.ui.Settings.SoundDisplaySettings import SoundDisplaySettingsWidget
-from Application.ui.Settings.WifiSettings import WifiSettingsWidget
-from Application.ui.Settings.VpnSettings import VpnSettingsWidget
+from Application.ui.Settings.NetworkSettings import NetworkSettingsWidget
 from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
 from Application.ui.Settings.BluetoothSettings import BluetoothSettingsWidget
+from Application.ui.Settings.WeatherSettings import WeatherSettingsWidget
 from Application.ui.Settings.tab_style import tab_widget_stylesheet
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
 
@@ -70,15 +70,15 @@ class BasicSettingsWidget(QWidget):
         self.nav_buttons = []
         self.general_subsections = [
             ("General", "general", self.create_general_page),
-            ("Theme", "theme", self.create_theme_page),
             ("Background", "background", self.create_background_page),
+            ("Theme", "theme", self.create_theme_page),
+            ("Weather", "weather", lambda: WeatherSettingsWidget(self.launcher)),
         ]
         # Ordered from most to least important; pages are built from this same list.
         self.sections = [
             ("⚙  General", "general", self.create_general_container),
-            ("📶  Wi-Fi", "wifi", lambda: WifiSettingsWidget(self.launcher)),
-            ("🔒  VPN", "vpn", lambda: VpnSettingsWidget(self.launcher)),
             ("🎛  Display & Sound", "sound_display", lambda: SoundDisplaySettingsWidget(self.launcher)),
+            ("🌐  Network", "network", lambda: NetworkSettingsWidget(self.launcher)),
             ("🔵  Bluetooth", "bluetooth", lambda: BluetoothSettingsWidget(self.launcher)),
             ("🎮  Controller", "controller", lambda: ControllerSettingsWidget(self.launcher)),
             ("🚀  Applications", "applications", self.create_apps_page),

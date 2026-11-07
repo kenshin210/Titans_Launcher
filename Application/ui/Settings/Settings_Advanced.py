@@ -15,7 +15,10 @@ from PyQt6.QtGui import QIcon
 
 from Application.ui.dialogs.file_picker import ControllerFileDialog
 from Application.core.config import DEFAULT_VIDEO_PATH
-from Application.core.time_sync import fetch_ntp_time
+from Application.core.time_sync import (
+    COUNTRY_TIMEZONES, available_timezones, configured_timezone, effective_offset, fetch_ntp_time,
+    timezone_offset_hours,
+)
 from Application.ui.Settings.Logger import (
     LOG_FILE,
     logger,
@@ -26,12 +29,13 @@ from Application.ui.Settings.Logger import (
 )
 from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
 from Application.ui.Settings.SoundDisplaySettings import SoundDisplaySettingsWidget
-from Application.ui.Settings.WifiSettings import WifiSettingsWidget
-from Application.ui.Settings.VpnSettings import VpnSettingsWidget
+from Application.ui.Settings.NetworkSettings import NetworkSettingsWidget
 from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
 from Application.ui.Settings.BluetoothSettings import BluetoothSettingsWidget
+from Application.ui.Settings.WeatherSettings import WeatherSettingsWidget
 from Application.ui.Settings.tab_style import tab_widget_stylesheet
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
+from Application.ui.Settings.UninstallApps import UninstallAppsWidget
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -81,21 +85,20 @@ class AdvancedSettingsWidget(QWidget):
         self.nav_buttons = []
         self.general_subsections = [
             ("General", "general", self.create_general_page),
-            ("Theme & Power", "theme", self.create_theme_page),
             ("Background", "background", self.create_background_page),
-            ("NTP & Region", "ntp", self.create_ntp_page),
+            ("Theme & Power", "theme", self.create_theme_page),
+            ("Date & Time", "ntp", self.create_ntp_page),
+            ("Weather", "weather", lambda: WeatherSettingsWidget(self.launcher)),
         ]
         # Ordered from most to least important; pages are built from this same list.
         self.sections = [
             ("⚙  General", "general", self.create_general_container),
-            ("📶  Wi-Fi", "wifi", lambda: WifiSettingsWidget(self.launcher)),
-            ("🔒  VPN", "vpn", lambda: VpnSettingsWidget(self.launcher)),
             ("🎛  Display & Sound", "sound_display", lambda: SoundDisplaySettingsWidget(self.launcher)),
+            ("🌐  Network", "network", lambda: NetworkSettingsWidget(self.launcher, advanced=True)),
             ("🔵  Bluetooth", "bluetooth", lambda: BluetoothSettingsWidget(self.launcher)),
             ("🎮  Controller", "controller", lambda: ControllerSettingsWidget(self.launcher)),
-            ("🚀  Applications", "applications", self.create_apps_page),
+            ("🚀  Applications", "applications", self.create_applications_container),
             ("📊  Task Manager", "task_manager", lambda: TaskManagerWidget(self.launcher)),
-            ("🏷  App Icons", "app_icons", self.create_icons_page),
             ("📋  Logging", "logging", self.create_logging_page),
             ("ℹ  About Device", "about_device", lambda: AboutDeviceWidget(self.launcher)),
         ]
@@ -265,6 +268,58 @@ class AdvancedSettingsWidget(QWidget):
             self.general_tab_keys.append(key)
         self.general_tabs.currentChanged.connect(self.on_general_tab_changed)
         return self.general_tabs
+
+    def create_applications_container(self):
+        theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
+        tabs = QTabWidget()
+        tabs.setStyleSheet(tab_widget_stylesheet(theme_color))
+        tabs.addTab(self.create_apps_page(), "Applications")
+        tabs.addTab(self.create_icons_page(), "App Icons")
+        tabs.addTab(UninstallAppsWidget(self.launcher), "Uninstall Apps")
+        tabs.addTab(self.create_applications_module_page(), "Applications Module")
+        return tabs
+
+    def create_applications_module_page(self):
+        card = QWidget()
+        card.setObjectName("settingsCard")
+        card.setStyleSheet("""
+            QWidget#settingsCard {
+                background-color: rgba(22, 22, 22, 200);
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 14px;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(35, 35, 35, 35)
+        layout.setSpacing(18)
+
+        title = QLabel("Applications Module")
+        title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            "Adds the Home and Applications tabs to the top of the home screen, where apps can be "
+            "browsed, installed and uninstalled. When disabled, both tabs are hidden and only the "
+            "launcher view is shown."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
+        layout.addWidget(desc)
+
+        checkbox = QCheckBox("Enable the Applications module")
+        checkbox.setStyleSheet("color: white; font-size: 16px; border: none;")
+        checkbox.setChecked(self.launcher.applications_module_enabled())
+
+        def toggle(checked):
+            self.launcher.config["_module_applications"] = checked
+            self.launcher.save_config_file()
+            self.launcher.apply_applications_module()
+            log_info(f"Applications module {'enabled' if checked else 'disabled'}")
+
+        checkbox.toggled.connect(toggle)
+        layout.addWidget(checkbox)
+        layout.addStretch()
+        return card
 
     def on_general_tab_changed(self, index):
         if self.section_keys[self.pages.currentIndex()] == "general" and 0 <= index < len(self.general_tab_keys):
@@ -687,7 +742,7 @@ class AdvancedSettingsWidget(QWidget):
         scroll.setWidget(card)
         return scroll
 
-    # --- TAB 6: NTP & Region ---
+    # --- TAB 6: Date & Time ---
     def create_ntp_page(self):
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         card = QWidget()
@@ -703,7 +758,7 @@ class AdvancedSettingsWidget(QWidget):
         layout.setContentsMargins(35, 35, 35, 35)
         layout.setSpacing(18)
 
-        title = QLabel("NTP & Region Synchronization")
+        title = QLabel("Date & Time")
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
@@ -740,6 +795,25 @@ class AdvancedSettingsWidget(QWidget):
         offset_input = QLineEdit(str(self.launcher.config.get("_ntp_offset", 12)))
         offset_input.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
 
+        timezone_combo = QComboBox()
+        timezone_combo.setEditable(True)
+        timezone_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
+        zone_names = sorted(available_timezones())
+        timezone_combo.addItems(zone_names)
+        timezone_combo.setCurrentText(configured_timezone(self.launcher.config))
+        zone_completer = QCompleter(zone_names, timezone_combo)
+        zone_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        zone_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        timezone_combo.setCompleter(zone_completer)
+
+        auto_dst_checkbox = QCheckBox("Adjust for daylight saving automatically (uses the time zone above)")
+        auto_dst_checkbox.setChecked(bool(self.launcher.config.get("_ntp_auto_dst", True)))
+        auto_dst_checkbox.setStyleSheet("color: white; font-size: 14px;")
+
+        dst_checkbox = QCheckBox("Daylight saving time is active (adds 1 hour to the UTC offset)")
+        dst_checkbox.setChecked(bool(self.launcher.config.get("_ntp_dst", False)))
+        dst_checkbox.setStyleSheet("color: white; font-size: 14px;")
+
         time_format_combo = QComboBox()
         time_format_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
         time_format_combo.addItems(["12-Hour (AM/PM)", "24-Hour"])
@@ -748,6 +822,35 @@ class AdvancedSettingsWidget(QWidget):
         ntp_form.addRow(QLabel("Country Name:"), country_combo)
         ntp_form.addRow(QLabel("NTP Server Address:"), server_input)
         ntp_form.addRow(QLabel("UTC Offset (Hours):"), offset_input)
+        ntp_form.addRow(QLabel("Time Zone:"), timezone_combo)
+        ntp_form.addRow(QLabel("Automatic Daylight Saving:"), auto_dst_checkbox)
+        ntp_form.addRow(QLabel("Manual Daylight Saving:"), dst_checkbox)
+        zone_status = QLabel()
+        zone_status.setStyleSheet("color: #888888; font-size: 13px;")
+        ntp_form.addRow(QLabel(""), zone_status)
+
+        def update_manual_state():
+            automatic = auto_dst_checkbox.isChecked()
+            offset_input.setEnabled(not automatic)
+            dst_checkbox.setEnabled(not automatic)
+            timezone_combo.setEnabled(automatic)
+            current = timezone_offset_hours(timezone_combo.currentText().strip())
+            if not automatic:
+                zone_status.setText("Using the manual UTC offset above.")
+            elif current is None:
+                zone_status.setText("Unknown time zone - the manual offset will be used instead.")
+            else:
+                zone_status.setText(f"Current offset for this zone: UTC{current:+g} (daylight saving included).")
+
+        def country_changed(name):
+            zone = COUNTRY_TIMEZONES.get(name.strip())
+            if zone and zone in zone_names:
+                timezone_combo.setCurrentText(zone)
+
+        country_combo.currentTextChanged.connect(country_changed)
+        auto_dst_checkbox.toggled.connect(update_manual_state)
+        timezone_combo.currentTextChanged.connect(lambda _text: update_manual_state())
+        update_manual_state()
         ntp_form.addRow(QLabel("Time Format:"), time_format_combo)
 
         save_ntp_btn = QPushButton("Save NTP Settings")
@@ -757,16 +860,19 @@ class AdvancedSettingsWidget(QWidget):
             self.launcher.config["_ntp_country"] = country_combo.currentText().strip()
             self.launcher.config["_ntp_server"] = server_input.text().strip()
             self.launcher.config["_time_format"] = time_format_combo.currentText()
+            self.launcher.config["_ntp_dst"] = dst_checkbox.isChecked()
+            self.launcher.config["_ntp_auto_dst"] = auto_dst_checkbox.isChecked()
+            self.launcher.config["_ntp_timezone"] = timezone_combo.currentText().strip()
             try:
                 self.launcher.config["_ntp_offset"] = float(offset_input.text().strip())
             except ValueError:
                 self.launcher.config["_ntp_offset"] = 12.0
 
             self.launcher.save_config_file()
-            log_info(f"Advanced Settings: Updated NTP server='{self.launcher.config['_ntp_server']}', country='{self.launcher.config['_ntp_country']}', offset={self.launcher.config['_ntp_offset']}")
+            log_info(f"Advanced Settings: Updated NTP server='{self.launcher.config['_ntp_server']}', country='{self.launcher.config['_ntp_country']}', offset={self.launcher.config['_ntp_offset']}, dst={self.launcher.config['_ntp_dst']}, auto_dst={self.launcher.config['_ntp_auto_dst']}, timezone='{self.launcher.config['_ntp_timezone']}'")
 
             def immediate_fetch():
-                t = fetch_ntp_time(self.launcher.config["_ntp_server"], self.launcher.config["_ntp_offset"])
+                t = fetch_ntp_time(self.launcher.config["_ntp_server"], effective_offset(self.launcher.config))
                 if t:
                     self.launcher.current_ntp_time = t
             threading.Thread(target=immediate_fetch, daemon=True).start()
