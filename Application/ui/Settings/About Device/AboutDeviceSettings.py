@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
+from Application.ui.Settings.tab_style import tab_widget_stylesheet
 
 SystemUpdateWidget = import_module(
     "Application.ui.Settings.About Device.Updates"
@@ -224,28 +225,8 @@ class AboutDeviceWidget(QWidget):
 
         root_layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
-        theme_color = "#DC143C"
-        self.tabs.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border: 1px solid rgba(255, 255, 255, 25);
-                background: rgba(18, 18, 18, 220);
-                border-radius: 10px;
-            }}
-            QTabBar::tab {{
-                background: rgba(35, 35, 35, 180);
-                color: #bbb;
-                padding: 10px 22px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }}
-            QTabBar::tab:selected {{
-                background: {theme_color};
-                color: white;
-            }}
-        """)
+        theme_color = launcher.get_theme_color() if launcher and hasattr(launcher, "get_theme_color") else "#DC143C"
+        self.tabs.setStyleSheet(tab_widget_stylesheet(theme_color))
         root_layout.addWidget(self.tabs)
 
         self.about_page = QWidget()

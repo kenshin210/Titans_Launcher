@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QTabWidget
 )
 from PyQt6.QtCore import Qt, QProcess, QTimer
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QColor, QIcon
 
 from Application.ui.dialogs.file_picker import ControllerFileDialog
 from Application.core.config import DEFAULT_VIDEO_PATH
@@ -33,7 +33,8 @@ from Application.ui.Settings.NetworkSettings import NetworkSettingsWidget
 from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
 from Application.ui.Settings.BluetoothSettings import BluetoothSettingsWidget
 from Application.ui.Settings.WeatherSettings import WeatherSettingsWidget
-from Application.ui.Settings.tab_style import tab_widget_stylesheet
+from Application.ui.Settings.tab_style import tab_widget_stylesheet, update_tab_styles
+from Application.ui.Settings.controller_focus import SettingsFocusOverlay
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
 from Application.ui.Settings.UninstallApps import UninstallAppsWidget
 
@@ -169,6 +170,7 @@ class AdvancedSettingsWidget(QWidget):
             self.pages.addWidget(build_page())
 
         root_layout.addWidget(self.pages, stretch=1)
+        self.controller_focus_overlay = SettingsFocusOverlay(self)
 
         # Theme, Background and NTP now live inside the General page as tabs.
         general_index = self.section_keys.index("general")
@@ -220,7 +222,7 @@ class AdvancedSettingsWidget(QWidget):
                         border: 1px solid transparent;
                         border-left: 6px solid transparent;
                     }
-                    QPushButton:hover {
+                    QPushButton:hover, QPushButton:focus {
                         background-color: rgba(45, 45, 45, 180);
                         color: #FFFFFF;
                         border-left: 6px solid rgba(255, 255, 255, 80);
@@ -246,7 +248,7 @@ class AdvancedSettingsWidget(QWidget):
 
         focused_widget = QApplication.focusWidget()
         target_tab = None
-        while focused_widget and focused_widget is not current_page:
+        while focused_widget is not None and focused_widget is not current_page:
             if isinstance(focused_widget, QTabWidget) and focused_widget in tab_widgets:
                 target_tab = focused_widget
                 break
@@ -705,12 +707,20 @@ class AdvancedSettingsWidget(QWidget):
         theme_form.addRow(anim_checkbox)
         theme_form.addRow(glitch_checkbox)
 
-        save_theme_btn = QPushButton("Save Theme & Power Settings")
-        save_theme_btn.setStyleSheet(f"background-color: {theme_color}; color: white; padding: 12px 24px; font-weight: bold; border-radius: 8px; font-size: 15px;")
+        save_theme_btn = QPushButton("Save Settings")
+
+        def update_save_button_color(color):
+            save_theme_btn.setStyleSheet(f"background-color: {color}; color: white; padding: 12px 24px; font-weight: bold; border-radius: 8px; font-size: 15px;")
+
+        update_save_button_color(theme_color)
 
         def save_launcher_theme():
             selected_theme = theme_combo.currentText()
             custom_hex = hex_input.text().strip()
+            color = QColor(custom_hex)
+            if not color.isValid() or color.alpha() != 255:
+                QMessageBox.warning(self, "Invalid Theme Color", "Enter a valid opaque theme color, such as #DC143C.")
+                return
             selected_shape = shape_combo.currentText()
             power_cmd = power_cmd_input.text().strip()
             sleep_cmd = sleep_cmd_input.text().strip()
@@ -731,6 +741,8 @@ class AdvancedSettingsWidget(QWidget):
 
             self.launcher.save_config_file()
             self.launcher.refresh_applications_view()
+            update_tab_styles(self, self.launcher.get_theme_color())
+            update_save_button_color(color.name())
             log_info(f"Advanced Settings: Saved theme '{selected_theme}', hex '{custom_hex}', shape '{selected_shape}', anim={enable_anim}, glitch={enable_glitch}")
             QMessageBox.information(self, "Success", "Theme and power settings saved successfully!")
 
@@ -911,27 +923,7 @@ class AdvancedSettingsWidget(QWidget):
 
         # Primary Sub-Tabs inside the Logging page: "Terminal" first, then "Application Logs"
         self.log_main_tabs = QTabWidget()
-        self.log_main_tabs.setStyleSheet(f"""
-            QTabWidget::pane {{
-                border: 1px solid rgba(255, 255, 255, 25);
-                background: rgba(18, 18, 18, 220);
-                border-radius: 10px;
-            }}
-            QTabBar::tab {{
-                background: rgba(35, 35, 35, 180);
-                color: #bbb;
-                padding: 10px 22px;
-                margin-right: 4px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-            }}
-            QTabBar::tab:selected {{
-                background: {theme_color};
-                color: white;
-            }}
-        """)
+        self.log_main_tabs.setStyleSheet(tab_widget_stylesheet(theme_color))
 
         # --- SUB-PAGE 1: Embedded Terminal (Added First) ---
         terminal_container = QWidget()
@@ -1049,27 +1041,7 @@ class AdvancedSettingsWidget(QWidget):
         app_log_layout.setSpacing(12)
 
         self.level_tabs = QTabWidget()
-        self.level_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid rgba(255, 255, 255, 20);
-                background: rgba(12, 12, 12, 240);
-                border-radius: 8px;
-            }
-            QTabBar::tab {
-                background: rgba(30, 30, 30, 190);
-                color: #aaa;
-                padding: 8px 18px;
-                margin-right: 3px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QTabBar::tab:selected {
-                background: rgba(60, 60, 60, 240);
-                color: white;
-            }
-        """)
+        self.level_tabs.setStyleSheet(tab_widget_stylesheet(theme_color))
 
         self.log_views = {}
         levels = [

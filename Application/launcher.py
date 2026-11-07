@@ -45,6 +45,7 @@ from .core.controller import (
     load_controller_bindings,
     map_raw_input,
 )
+from .core.browser_controller import BrowserController
 from .core.proxy import proxy_environment
 from .core.sound import NavigationSoundPlayer
 from .core.time_sync import fetch_ntp_time, start_ntp_sync_thread
@@ -54,8 +55,10 @@ from .ui.Settings.tab_style import tab_widget_stylesheet
 from .ui.Settings.AsyncTask import TaskRunnerMixin, cleanup_all_tasks
 from .ui.controller_navigation import (
     handle_focused_widget_input,
+    handle_home_navigation,
     handle_modal_input,
     handle_popup_input,
+    handle_settings_navigation,
 )
 from .ui.dialogs.app_editor import ApplicationEditorDialog
 from .ui.dialogs.themed_message_box import ThemedMessageBox
@@ -72,6 +75,8 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.controller_capture_active = False
         self.active_app_process = None
         self.active_app_controller_close_enabled = False
+        self.browser_controller = None
+        self.browser_controller_error = None
         self.launcher_sleeping = False
         self.controller_back_suppressed_until = 0.0
         self.reload_controller_profile()
@@ -111,6 +116,14 @@ class MainApp(QWidget, TaskRunnerMixin):
                         self.active_app_process.terminate()
                     except OSError as error:
                         log_error(f"Failed to close launched application: {error}", details=str(error))
+            elif action and self.browser_controller:
+                try:
+                    self.browser_controller.handle_action(action)
+                except OSError as error:
+                    log_error(f"Browser controller input failed: {error}")
+                    self.browser_controller_error = str(error)
+                    self.browser_controller.close()
+                    self.browser_controller = None
             return
         if action == "back" and time.monotonic() < self.controller_back_suppressed_until:
             return
@@ -122,26 +135,19 @@ class MainApp(QWidget, TaskRunnerMixin):
             return
         if self.handle_confirmation_dialog_input(action):
             return
+        if action and self.stacked_widget.currentWidget() == self.settings_page:
+            settings_widget = getattr(self, "current_settings_widget", None)
+            if settings_widget and handle_settings_navigation(settings_widget, action):
+                return
+        if action and self.stacked_widget.currentWidget() == self.home_page:
+            if handle_home_navigation(self, action):
+                return
         if action and handle_focused_widget_input(action):
             return
         if action in ("right", "down"):
-            if action == "right" and self.stacked_widget.currentWidget() == self.settings_page:
-                settings_widget = getattr(self, "current_settings_widget", None)
-                if settings_widget:
-                    settings_widget.navigate_tabs(1)
-                else:
-                    self.focusNextChild()
-            else:
-                self.focusNextChild()
+            self.focusNextChild()
         elif action in ("left", "up"):
-            if action == "left" and self.stacked_widget.currentWidget() == self.settings_page:
-                settings_widget = getattr(self, "current_settings_widget", None)
-                if settings_widget:
-                    settings_widget.navigate_tabs(-1)
-                else:
-                    self.focusPreviousChild()
-            else:
-                self.focusPreviousChild()
+            self.focusPreviousChild()
         elif action in ("previous_tab", "next_tab"):
             settings_widget = getattr(self, "current_settings_widget", None)
             direction = -1 if action == "previous_tab" else 1
@@ -443,12 +449,37 @@ class MainApp(QWidget, TaskRunnerMixin):
         dialog.exec()
 
     def closeEvent(self, event):
+        log_info("Checking async tasks before launcher shutdown.")
+        if not cleanup_all_tasks(timeout_ms=3000):
+            self.show_error_overlay(
+                "Tasks Still Running",
+                "A background task is still running. Wait for it to finish, then close the launcher again."
+            )
+            event.ignore()
+            return
+
+        controller_thread = getattr(self, "controller_thread", None)
+        if controller_thread is not None and controller_thread.isRunning():
+            log_info("Stopping controller polling thread during launcher shutdown.")
+            controller_thread.stop()
+            if not controller_thread.wait(5000):
+                log_warning("Controller thread did not stop within timeout; launcher shutdown postponed.")
+                self.show_error_overlay(
+                    "Controller Still Stopping",
+                    "The controller is still shutting down. Wait a moment, then close the launcher again."
+                )
+                event.ignore()
+                return
+
         if hasattr(self, "clock_timer"):
             self.clock_timer.stop()
         if hasattr(self, "weather_timer"):
             self.weather_timer.stop()
         if hasattr(self, "video_timer"):
             self.video_timer.stop()
+        if self.browser_controller:
+            self.browser_controller.close()
+            self.browser_controller = None
         if self.cap:
             self.cap.release()
             self.cap = None
@@ -456,16 +487,6 @@ class MainApp(QWidget, TaskRunnerMixin):
         ntp_stop_event = getattr(self, "_ntp_stop_event", None)
         if ntp_stop_event is not None:
             ntp_stop_event.set()
-
-        controller_thread = getattr(self, "controller_thread", None)
-        if controller_thread is not None and controller_thread.isRunning():
-            log_info("Stopping controller polling thread during launcher shutdown.")
-            controller_thread.stop()
-            if not controller_thread.wait(5000):
-                log_warning("Controller thread did not stop within timeout.")
-
-        log_info("Cleaning up async tasks during launcher shutdown.")
-        cleanup_all_tasks(timeout_ms=3000)
 
         event.accept()
 
@@ -629,6 +650,12 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         if hasattr(self, 'power_menu'):
             self.power_menu.setStyleSheet(load_stylesheet(theme_color=theme_color))
+        if hasattr(self, "home_tabs"):
+            self.home_tabs.setStyleSheet(
+                tab_widget_stylesheet(theme_color)
+                + "QTabWidget#homeTabs::pane { background: transparent; border: none; }"
+                + "QTabWidget#homeTabs::tab-bar { alignment: center; }"
+            )
 
     def init_video_background(self):
         if hasattr(self, 'video_timer') and self.video_timer.isActive():
@@ -770,7 +797,14 @@ class MainApp(QWidget, TaskRunnerMixin):
                 self.show_error_overlay("Command Not Found", f"The command could not be found:\n{executable}")
                 return
 
-        if data.get("manage_antimicrox", False):
+        executable_name = Path(executable).name.lower()
+        is_website = data.get("type") == "website"
+        use_browser_controller = (
+            is_website
+            and executable_name in ("firefox", "firefox-esr")
+            and not (data.get("manage_antimicrox", False) and data.get("profile", ""))
+        )
+        if data.get("manage_antimicrox", False) and not use_browser_controller:
             log_info("Managing AntiMicroX: Terminating existing antimicrox instances.")
             subprocess.run(["pkill", "-f", "antimicrox"])
 
@@ -792,8 +826,6 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         cmd_list = [executable]
         arguments = shlex.split(arguments_str)
-        executable_name = Path(executable).name.lower()
-        is_website = data.get("type") == "website"
         if executable_name in ("firefox", "firefox-esr") and not is_website:
             arguments = [argument for argument in arguments if argument != "--kiosk"]
 
@@ -837,6 +869,20 @@ class MainApp(QWidget, TaskRunnerMixin):
                 arguments[0:0] = ["--profile", str(firefox_profile)]
         cmd_list.extend(arguments)
 
+        if use_browser_controller:
+            if not PYGAME_AVAILABLE:
+                log_warning("Firefox controller navigation requires pygame-ce.")
+                self.show_error_overlay("Controller Unavailable", "Install pygame-ce to use the controller in Firefox.")
+            else:
+                try:
+                    self.browser_controller = BrowserController()
+                except (ImportError, OSError) as error:
+                    log_error(f"Could not enable Firefox controller navigation: {error}")
+                    self.show_error_overlay(
+                        "Controller Unavailable",
+                        f"Firefox controller navigation requires python-evdev and write access to /dev/uinput:\n{error}"
+                    )
+
         try:
             log_info(f"Spawning application process: {' '.join(cmd_list)}")
             proc = subprocess.Popen(cmd_list, env={**os.environ, **proxy_environment(self.config)})
@@ -844,6 +890,9 @@ class MainApp(QWidget, TaskRunnerMixin):
             self.active_app_controller_close_enabled = controller_close_enabled
             log_info(f"Application '{executable}' running (PID: {proc.pid})")
         except Exception as e:
+            if self.browser_controller:
+                self.browser_controller.close()
+                self.browser_controller = None
             log_critical(f"Failed to execute process '{executable}': {e}", details=str(e))
             self.show_error_overlay("Launch Failed", f"Could not launch {executable}:\n{e}")
             return
@@ -871,6 +920,9 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def on_app_finished(self):
         log_info("Restoring launcher interface after application exit.")
+        if self.browser_controller:
+            self.browser_controller.close()
+            self.browser_controller = None
         self.active_app_process = None
         self.active_app_controller_close_enabled = False
         self.launcher_sleeping = False
@@ -880,6 +932,10 @@ class MainApp(QWidget, TaskRunnerMixin):
             self.clock_timer.start(1000)
         self.update_clock_display()
         self.init_video_background()
+        if self.browser_controller_error:
+            error = self.browser_controller_error
+            self.browser_controller_error = None
+            self.show_error_overlay("Controller Input Failed", f"Firefox controller input stopped working:\n{error}")
 
     def show_settings_page(self, section=None):
         if getattr(self, 'is_animating', False):
@@ -1201,6 +1257,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             self.config["_advanced_mode"] = checked
             self.save_config_file()
             self.build_settings_view(checked)
+            self.current_settings_widget.focus_current_menu_item()
 
         try:
             if is_advanced:

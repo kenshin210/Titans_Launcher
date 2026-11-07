@@ -1,7 +1,10 @@
 import subprocess
+import time
 
 from PyQt6 import sip
 from PyQt6.QtCore import QThread, pyqtSignal
+
+from Application.ui.Settings.Logger import log_warning
 
 
 def run_command(command, timeout=10, input_text=None):
@@ -44,17 +47,15 @@ _ACTIVE_TASKS = set()
 
 
 def cleanup_all_tasks(timeout_ms=5000):
-    """Wait for all active async tasks to complete before shutdown."""
-    if not _ACTIVE_TASKS:
-        return
-    
+    """Wait up to the shared deadline; return False if work is still running."""
+    deadline = time.monotonic() + timeout_ms / 1000
     for task in list(_ACTIVE_TASKS):
         if task.isRunning():
-            task.requestInterruption()
-    
-    for task in list(_ACTIVE_TASKS):
-        if task.isRunning():
-            task.wait(timeout_ms // len(_ACTIVE_TASKS))
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if not task.wait(remaining_ms):
+                log_warning("An asynchronous task is still running; launcher shutdown postponed.")
+                return False
+    return True
 
 
 class TaskRunnerMixin:
@@ -65,11 +66,14 @@ class TaskRunnerMixin:
         _ACTIVE_TASKS.add(task)
 
         def finish(result):
-            _ACTIVE_TASKS.discard(task)
-            task.deleteLater()
             if not sip.isdeleted(self):
                 callback(result)
 
+        def release():
+            _ACTIVE_TASKS.discard(task)
+            task.deleteLater()
+
         task.done.connect(finish)
+        task.finished.connect(release)
         task.start()
         return task

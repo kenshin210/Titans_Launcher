@@ -21,7 +21,7 @@ done
 python -m venv .venv
 source .venv/bin/activate
 
-PACKAGES=("opencv-python" "pygame-ce" "PyQt6" "psutil")
+PACKAGES=("opencv-python" "pygame-ce" "PyQt6" "psutil" "evdev")
 
 echo "Installing python modules.."
 

@@ -19,7 +19,8 @@ from Application.ui.Settings.NetworkSettings import NetworkSettingsWidget
 from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
 from Application.ui.Settings.BluetoothSettings import BluetoothSettingsWidget
 from Application.ui.Settings.WeatherSettings import WeatherSettingsWidget
-from Application.ui.Settings.tab_style import tab_widget_stylesheet
+from Application.ui.Settings.tab_style import tab_widget_stylesheet, update_tab_styles
+from Application.ui.Settings.controller_focus import SettingsFocusOverlay
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
 
 AboutDeviceWidget = import_module(
@@ -152,6 +153,7 @@ class BasicSettingsWidget(QWidget):
             self.pages.addWidget(build_page())
 
         root_layout.addWidget(self.pages, stretch=1)
+        self.controller_focus_overlay = SettingsFocusOverlay(self)
 
         # Theme, Background and NTP now live inside the General page as tabs.
         general_index = self.section_keys.index("general")
@@ -204,7 +206,7 @@ class BasicSettingsWidget(QWidget):
                         border: 1px solid transparent;
                         border-left: 6px solid transparent;
                     }
-                    QPushButton:hover {
+                    QPushButton:hover, QPushButton:focus {
                         background-color: rgba(45, 45, 45, 180);
                         color: #FFFFFF;
                         border-left: 6px solid rgba(255, 255, 255, 80);
@@ -230,7 +232,7 @@ class BasicSettingsWidget(QWidget):
 
         focused_widget = QApplication.focusWidget()
         target_tab = None
-        while focused_widget and focused_widget is not current_page:
+        while focused_widget is not None and focused_widget is not current_page:
             if isinstance(focused_widget, QTabWidget) and focused_widget in tab_widgets:
                 target_tab = focused_widget
                 break
@@ -460,6 +462,7 @@ class BasicSettingsWidget(QWidget):
             self.launcher.config["_theme"] = selected_theme
             self.launcher.save_config_file()
             self.launcher.refresh_applications_view()
+            update_tab_styles(self, self.launcher.get_theme_color())
             log_info(f"Basic Settings: Saved theme color '{selected_theme}'")
             QMessageBox.information(self, "Success", "Theme updated!")
 
