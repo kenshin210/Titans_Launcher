@@ -184,3 +184,83 @@ QLabel#transitionProxy {
     background: transparent;
     border: none;
 }
+
+QLabel#soundDisplayTitle {
+    color: #FFFFFF;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+QLabel#soundDisplayDescription,
+QLabel#soundDisplayStatus {
+    color: #AAAAAA;
+    font-size: 14px;
+}
+
+QLabel#soundDisplaySectionTitle {
+    color: #FFFFFF;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+QLabel#soundDisplayValue {
+    color: #FFFFFF;
+    font-size: 14px;
+}
+
+QFrame#soundDisplayCard {
+    background-color: rgba(22, 22, 22, 200);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 8px;
+}
+
+QComboBox#soundDisplayControl {
+    background-color: rgba(40, 40, 40, 220);
+    color: #FFFFFF;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 35);
+    border-radius: 4px;
+}
+
+QComboBox#soundDisplayControl:disabled {
+    color: rgba(255, 255, 255, 100);
+    background-color: rgba(40, 40, 40, 100);
+}
+
+QSlider#soundDisplaySlider::groove:horizontal {
+    height: 6px;
+    background: rgba(255, 255, 255, 45);
+    border-radius: 3px;
+}
+
+QSlider#soundDisplaySlider::handle:horizontal {
+    width: 16px;
+    margin: -5px 0;
+    background: $theme_color;
+    border-radius: 8px;
+}
+
+QPushButton#soundDisplayButton {
+    background-color: rgba(55, 55, 55, 210);
+    color: #FFFFFF;
+    padding: 8px 14px;
+    border: 1px solid rgba(255, 255, 255, 35);
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+QPushButton#soundDisplayButton:hover,
+QPushButton#soundDisplayButton:focus {
+    background-color: rgba(75, 75, 75, 230);
+    border-color: $theme_color;
+}
+
+QPushButton#soundDisplayButton:disabled {
+    color: rgba(255, 255, 255, 100);
+    background-color: rgba(45, 45, 45, 100);
+    border-color: rgba(255, 255, 255, 15);
+}
+
+QCheckBox {
+    color: #FFFFFF;
+}

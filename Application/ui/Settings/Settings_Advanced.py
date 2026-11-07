@@ -24,6 +24,7 @@ from Application.ui.Settings.Logger import (
     log_warning,
 )
 from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
+from Application.ui.Settings.SoundDisplaySettings import SoundDisplaySettingsWidget
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -80,11 +81,12 @@ class AdvancedSettingsWidget(QWidget):
             ("🌐  NTP & Region", 5),
             ("📋  Logging", 6),
             ("🎮  Controller", 7),
-            ("ℹ  About Device", 8)
+            ("🎛  Sound & Display", 8),
+            ("ℹ  About Device", 9)
         ]
         self.section_keys = [
             "general", "background", "applications", "app_icons", "theme",
-            "ntp", "logging", "controller", "about_device"
+            "ntp", "logging", "controller", "sound_display", "about_device"
         ]
 
         for label, idx in categories:
@@ -155,6 +157,7 @@ class AdvancedSettingsWidget(QWidget):
         self.pages.addWidget(self.create_ntp_page())
         self.pages.addWidget(self.create_logging_page())
         self.pages.addWidget(ControllerSettingsWidget(self.launcher))
+        self.pages.addWidget(SoundDisplaySettingsWidget(self.launcher))
         self.pages.addWidget(AboutDeviceWidget(self.launcher))
 
         root_layout.addWidget(self.pages, stretch=1)

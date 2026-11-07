@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt
 from Application.core.config import DEFAULT_VIDEO_PATH
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
 from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
+from Application.ui.Settings.SoundDisplaySettings import SoundDisplaySettingsWidget
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -64,11 +65,13 @@ class BasicSettingsWidget(QWidget):
             ("🖼  Background", 1),
             ("🚀  Applications", 2),
             ("🎨  Theme", 3),
-            ("🎮  Controller", 4),
-            ("ℹ  About Device", 5)
+            ("🎛  Sound & Display", 4),
+            ("🎮  Controller", 5),
+            ("ℹ  About Device", 6)
         ]
         self.section_keys = [
-            "general", "background", "applications", "theme", "controller", "about_device"
+            "general", "background", "applications", "theme", "sound_display",
+            "controller", "about_device"
         ]
 
         for label, idx in categories:
@@ -135,6 +138,7 @@ class BasicSettingsWidget(QWidget):
         self.pages.addWidget(self.create_background_page())
         self.pages.addWidget(self.create_apps_page())
         self.pages.addWidget(self.create_theme_page())
+        self.pages.addWidget(SoundDisplaySettingsWidget(self.launcher))
         self.pages.addWidget(ControllerSettingsWidget(self.launcher))
         self.pages.addWidget(AboutDeviceWidget(self.launcher))
 
