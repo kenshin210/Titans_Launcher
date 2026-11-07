@@ -5,9 +5,10 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSlot
 from PyQt6.QtWidgets import (
     QComboBox, QFormLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QInputDialog, QVBoxLayout, QWidget
+    QVBoxLayout, QWidget
 )
 
+from Application.ui.dialogs.on_screen_keyboard import OnScreenKeyboard
 from Application.core.config import CONTROLLER_INPUTS_DIR
 
 INPUTS_DIR = CONTROLLER_INPUTS_DIR
@@ -214,7 +215,7 @@ class ControllerSettingsWidget(QWidget):
         self.status_label.setText("")
 
     def add_profile(self):
-        name, accepted = QInputDialog.getText(self, "Add Controller Profile", "Profile name:")
+        name, accepted = OnScreenKeyboard.get_text(self, "Add Controller Profile - enter a profile name")
         if not accepted or not name.strip():
             return
         safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", name.strip()).strip("_")

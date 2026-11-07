@@ -44,10 +44,17 @@ from .core.controller import (
     load_controller_bindings,
     map_raw_input,
 )
+from .core.sound import NavigationSoundPlayer
 from .core.time_sync import fetch_ntp_time, start_ntp_sync_thread
+from .ui.controller_navigation import (
+    handle_focused_widget_input,
+    handle_modal_input,
+    handle_popup_input,
+)
 from .ui.dialogs.app_editor import ApplicationEditorDialog
 from .ui.dialogs.themed_message_box import ThemedMessageBox
 from .ui.widgets.animated_button import AnimatedLauncherButton
+from .ui.widgets.battery_indicator import BatteryIndicator
 
 class MainApp(QWidget):
     app_finished_signal = pyqtSignal()
@@ -68,7 +75,9 @@ class MainApp(QWidget):
 
         self.app_finished_signal.connect(self.on_app_finished)
 
+        self.nav_sound = NavigationSoundPlayer(self.config)
         self.initUI()
+        QApplication.instance().focusChanged.connect(self.on_focus_changed)
         self.start_ntp_sync_thread()
 
         if PYGAME_AVAILABLE:
@@ -101,7 +110,13 @@ class MainApp(QWidget):
             return
         if self.handle_power_menu_input(action):
             return
+        if handle_popup_input(action, ignore=self.power_menu):
+            return
+        if handle_modal_input(action):
+            return
         if self.handle_confirmation_dialog_input(action):
+            return
+        if action and handle_focused_widget_input(action):
             return
         if action in ("right", "down"):
             if action == "right" and self.stacked_widget.currentWidget() == self.settings_page:
@@ -197,6 +212,19 @@ class MainApp(QWidget):
     def save_config_file(self):
         save_config(self.config)
 
+    def on_focus_changed(self, old_widget, new_widget):
+        # Skip the initial focus grab so the sound only marks real movement.
+        if old_widget is None or new_widget is None:
+            return
+        if self.launcher_sleeping or self.isHidden():
+            return
+        if isinstance(new_widget, (QPushButton, QToolButton)):
+            self.nav_sound.play()
+
+    def refresh_battery_indicator(self):
+        if hasattr(self, "battery_indicator"):
+            self.battery_indicator.reload()
+
     def initUI(self):
         self.setWindowTitle("Application Launcher")
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -264,6 +292,9 @@ class MainApp(QWidget):
 
         self.power_btn.setMenu(self.power_menu)
         self.update_power_button_display()
+        self.battery_indicator = BatteryIndicator(self.config, self)
+        top_layout.addWidget(self.battery_indicator, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        top_layout.addSpacing(15)
         top_layout.addWidget(self.power_btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
 
         self.main_layout.addLayout(top_layout)
@@ -785,6 +816,8 @@ class MainApp(QWidget):
             home_widgets.append(self.title_label)
         if hasattr(self, 'power_btn') and self.power_btn.isVisible():
             home_widgets.append(self.power_btn)
+        if hasattr(self, 'battery_indicator') and self.battery_indicator.isVisible():
+            home_widgets.append(self.battery_indicator)
 
         if hasattr(self, 'apps_layout'):
             for i in range(self.apps_layout.count()):

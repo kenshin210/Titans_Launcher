@@ -42,7 +42,7 @@ class SoundDisplaySettingsWidget(QWidget):
         scroll.setWidget(content)
         root_layout.addWidget(scroll)
 
-        title = QLabel("Sound & Display")
+        title = QLabel("Display & Sound")
         title.setObjectName("soundDisplayTitle")
         content_layout.addWidget(title)
 

@@ -3,11 +3,11 @@
 echo "Installing Arch Dependencies"
 
 
-PACMAN=("python" "python-pip")
+PACMAN=("python" "python-pip" "networkmanager" "networkmanager-openvpn" "wireguard-tools" "openvpn" "bluez" "bluez-utils" "pacman-contrib" "polkit")
 
 for pkg in "${PACMAN[@]}"; do
 
-    sudo pacman -S --noconfirm "$pkg"
+    sudo pacman -S --needed --noconfirm "$pkg"
 
     if [ $? -eq 0 ]; then
         echo "Dependencies Installed"
@@ -21,7 +21,7 @@ done
 python -m venv .venv
 source .venv/bin/activate
 
-PACKAGES=("opencv-python" "pygame-ce" "PyQt6")
+PACKAGES=("opencv-python" "pygame-ce" "PyQt6" "psutil")
 
 echo "Installing python modules.."
 

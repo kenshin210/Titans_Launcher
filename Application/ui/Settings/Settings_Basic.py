@@ -4,15 +4,23 @@ from importlib import import_module
 import json
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit,
-    QPushButton, QCheckBox, QFileDialog, QMessageBox, QStackedWidget,
-    QListWidget, QComboBox, QCompleter, QLabel, QScrollArea
+    QPushButton, QCheckBox, QMessageBox, QStackedWidget,
+    QListWidget, QComboBox, QCompleter, QLabel, QScrollArea, QTabWidget,
+    QApplication
 )
 from PyQt6.QtCore import Qt
 
+from Application.ui.dialogs.file_picker import ControllerFileDialog
 from Application.core.config import DEFAULT_VIDEO_PATH
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
 from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
 from Application.ui.Settings.SoundDisplaySettings import SoundDisplaySettingsWidget
+from Application.ui.Settings.WifiSettings import WifiSettingsWidget
+from Application.ui.Settings.VpnSettings import VpnSettingsWidget
+from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
+from Application.ui.Settings.BluetoothSettings import BluetoothSettingsWidget
+from Application.ui.Settings.tab_style import tab_widget_stylesheet
+from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -60,19 +68,25 @@ class BasicSettingsWidget(QWidget):
         sidebar_layout.addWidget(menu_header)
 
         self.nav_buttons = []
-        categories = [
-            ("⚙  General", 0),
-            ("🖼  Background", 1),
-            ("🚀  Applications", 2),
-            ("🎨  Theme", 3),
-            ("🎛  Sound & Display", 4),
-            ("🎮  Controller", 5),
-            ("ℹ  About Device", 6)
+        self.general_subsections = [
+            ("General", "general", self.create_general_page),
+            ("Theme", "theme", self.create_theme_page),
+            ("Background", "background", self.create_background_page),
         ]
-        self.section_keys = [
-            "general", "background", "applications", "theme", "sound_display",
-            "controller", "about_device"
+        # Ordered from most to least important; pages are built from this same list.
+        self.sections = [
+            ("⚙  General", "general", self.create_general_container),
+            ("📶  Wi-Fi", "wifi", lambda: WifiSettingsWidget(self.launcher)),
+            ("🔒  VPN", "vpn", lambda: VpnSettingsWidget(self.launcher)),
+            ("🎛  Display & Sound", "sound_display", lambda: SoundDisplaySettingsWidget(self.launcher)),
+            ("🔵  Bluetooth", "bluetooth", lambda: BluetoothSettingsWidget(self.launcher)),
+            ("🎮  Controller", "controller", lambda: ControllerSettingsWidget(self.launcher)),
+            ("🚀  Applications", "applications", self.create_apps_page),
+            ("📊  Task Manager", "task_manager", lambda: TaskManagerWidget(self.launcher)),
+            ("ℹ  About Device", "about_device", lambda: AboutDeviceWidget(self.launcher)),
         ]
+        categories = [(label, index) for index, (label, _key, _build) in enumerate(self.sections)]
+        self.section_keys = [key for _label, key, _build in self.sections]
 
         for label, idx in categories:
             btn = MenuNavButton(label)
@@ -134,21 +148,22 @@ class BasicSettingsWidget(QWidget):
         self.pages = QStackedWidget()
         self.pages.setStyleSheet("background: transparent;")
 
-        self.pages.addWidget(self.create_general_page())
-        self.pages.addWidget(self.create_background_page())
-        self.pages.addWidget(self.create_apps_page())
-        self.pages.addWidget(self.create_theme_page())
-        self.pages.addWidget(SoundDisplaySettingsWidget(self.launcher))
-        self.pages.addWidget(ControllerSettingsWidget(self.launcher))
-        self.pages.addWidget(AboutDeviceWidget(self.launcher))
+        for _label, _key, build_page in self.sections:
+            self.pages.addWidget(build_page())
 
         root_layout.addWidget(self.pages, stretch=1)
 
+        # Theme, Background and NTP now live inside the General page as tabs.
+        general_index = self.section_keys.index("general")
+        if initial_section in self.general_tab_keys:
+            self.general_tabs.setCurrentIndex(self.general_tab_keys.index(initial_section))
         initial_index = (
             self.section_keys.index(initial_section)
-            if initial_section in self.section_keys else 0
+            if initial_section in self.section_keys else general_index
         )
         self.switch_tab(initial_index)
+        if initial_section in self.general_tab_keys:
+            self.current_section = initial_section
 
     def handle_mode_toggle(self):
         if self.on_toggle_advanced:
@@ -158,6 +173,8 @@ class BasicSettingsWidget(QWidget):
     def switch_tab(self, index):
         self.pages.setCurrentIndex(index)
         self.current_section = self.section_keys[index]
+        if self.current_section == "general" and self.general_tab_keys:
+            self.current_section = self.general_tab_keys[self.general_tabs.currentIndex()]
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
         for i, btn in enumerate(self.nav_buttons):
             if i == index:
@@ -199,6 +216,47 @@ class BasicSettingsWidget(QWidget):
         self.nav_buttons[next_index].setFocus()
         self.switch_tab(next_index)
 
+    def navigate_embedded_tabs(self, direction):
+        current_page = self.pages.currentWidget()
+        candidates = current_page.findChildren(QTabWidget)
+        if isinstance(current_page, QTabWidget):
+            candidates.insert(0, current_page)
+        tab_widgets = [
+            tab_widget for tab_widget in candidates
+            if tab_widget.isVisible() and tab_widget.count() > 1
+        ]
+        if not tab_widgets:
+            return False
+
+        focused_widget = QApplication.focusWidget()
+        target_tab = None
+        while focused_widget and focused_widget is not current_page:
+            if isinstance(focused_widget, QTabWidget) and focused_widget in tab_widgets:
+                target_tab = focused_widget
+                break
+            focused_widget = focused_widget.parentWidget()
+
+        if target_tab is None:
+            target_tab = tab_widgets[0]
+        target_index = (target_tab.currentIndex() + direction) % target_tab.count()
+        target_tab.setCurrentIndex(target_index)
+        return True
+
+    def create_general_container(self):
+        theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
+        self.general_tabs = QTabWidget()
+        self.general_tabs.setStyleSheet(tab_widget_stylesheet(theme_color))
+        self.general_tab_keys = []
+        for label, key, build_page in self.general_subsections:
+            self.general_tabs.addTab(build_page(), label)
+            self.general_tab_keys.append(key)
+        self.general_tabs.currentChanged.connect(self.on_general_tab_changed)
+        return self.general_tabs
+
+    def on_general_tab_changed(self, index):
+        if self.section_keys[self.pages.currentIndex()] == "general" and 0 <= index < len(self.general_tab_keys):
+            self.current_section = self.general_tab_keys[index]
+
     def focus_current_menu_item(self):
         if self.nav_buttons:
             self.nav_buttons[self.pages.currentIndex()].setFocus()
@@ -225,6 +283,7 @@ class BasicSettingsWidget(QWidget):
         desc = QLabel("Configure basic launcher behavior or switch to the Advanced Menu using the sidebar control.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
+        layout.addWidget(NavigationSoundCard(self.launcher))
         layout.addStretch()
         return card
 
@@ -261,7 +320,7 @@ class BasicSettingsWidget(QWidget):
         bg_browse_btn.setStyleSheet("background-color: rgba(60, 60, 60, 200); color: white; padding: 10px 18px; border-radius: 6px; font-weight: bold;")
 
         def browse_background():
-            file_path, _ = QFileDialog.getOpenFileName(
+            file_path, _ = ControllerFileDialog.get_open_file_name(
                 self, "Select Background Video", str(Path.home()), "Video Files (*.mp4 *.avi *.mkv);;All Files (*)"
             )
             if file_path:

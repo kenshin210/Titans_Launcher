@@ -40,6 +40,13 @@ DEFAULT_CONFIG = {
     "_sleep_command": "systemctl suspend",
     "_restart_command": "systemctl reboot",
     "_power_icon_path": "",
+    "_nav_sound_enabled": True,
+    "_nav_sound_choice": "Tick",
+    "_nav_sound_custom_path": "",
+    "_nav_sound_volume": 60,
+    "_battery_device_address": "",
+    "_battery_device_name": "",
+    "_battery_short_name": "",
     "_custom_colors": {
         "Crimson Red": "#DC143C",
         "Cyberpunk Blue": "#00F0FF",
@@ -107,6 +114,13 @@ def load_config():
             "_sleep_command": "systemctl suspend",
             "_restart_command": "systemctl reboot",
             "_power_icon_path": "",
+            "_nav_sound_enabled": True,
+            "_nav_sound_choice": "Tick",
+            "_nav_sound_custom_path": "",
+            "_nav_sound_volume": 60,
+            "_battery_device_address": "",
+            "_battery_device_name": "",
+            "_battery_short_name": "",
             "_custom_colors": DEFAULT_CONFIG["_custom_colors"],
         }
         for key, value in migration_defaults.items():

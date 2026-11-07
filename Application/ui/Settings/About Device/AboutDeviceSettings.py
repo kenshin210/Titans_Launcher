@@ -15,9 +15,9 @@ from PyQt6.QtWidgets import (
 
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
 
-OverviewWidget = import_module(
-    "Application.ui.Settings.About Device.Overview"
-).OverviewWidget
+SystemUpdateWidget = import_module(
+    "Application.ui.Settings.About Device.Updates"
+).SystemUpdateWidget
 device_styles = import_module("Application.ui.Settings.About Device.DeviceStyles")
 
 create_device_page_title = device_styles.create_device_page_title
@@ -248,8 +248,6 @@ class AboutDeviceWidget(QWidget):
         """)
         root_layout.addWidget(self.tabs)
 
-        self.tabs.addTab(OverviewWidget(launcher), "Overview")
-
         self.about_page = QWidget()
         about_layout = QVBoxLayout(self.about_page)
         style_device_page(self.about_page, about_layout)
@@ -298,10 +296,11 @@ class AboutDeviceWidget(QWidget):
         specifications_layout.addLayout(specifications_form)
         specifications_layout.addStretch()
         self.tabs.addTab(self.specifications_page, "Device Specifications")
+        self.tabs.addTab(SystemUpdateWidget(launcher), "System Update")
         self.tabs.currentChanged.connect(self.update_specifications)
 
     def update_specifications(self, index):
-        if index != 2:
+        if self.tabs.widget(index) is not self.specifications_page:
             return
         self.specification_values["CPU:"].setText(get_cpu_name())
         self.specification_values["Memory:"].setText(get_memory_size())

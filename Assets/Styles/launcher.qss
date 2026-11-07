@@ -264,3 +264,43 @@ QPushButton#soundDisplayButton:disabled {
 QCheckBox {
     color: #FFFFFF;
 }
+
+QListWidget#connectivityList {
+    background-color: rgba(40, 40, 40, 160);
+    color: #FFFFFF;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 4px;
+    padding: 4px;
+    font-size: 14px;
+}
+
+QListWidget#connectivityList::item {
+    padding: 8px;
+}
+
+QListWidget#connectivityList::item:selected {
+    background-color: $theme_color;
+    color: #FFFFFF;
+}
+
+QTableWidget#taskTable {
+    background-color: rgba(40, 40, 40, 160);
+    color: #FFFFFF;
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 4px;
+    font-size: 14px;
+    selection-background-color: $theme_color;
+    selection-color: #FFFFFF;
+}
+
+QTableWidget#taskTable::item {
+    padding: 6px;
+}
+
+QTableWidget#taskTable QHeaderView::section {
+    background-color: rgba(30, 30, 30, 230);
+    color: #CCCCCC;
+    padding: 8px;
+    border: none;
+    font-weight: bold;
+}

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QFileDialog,
+    
     QFormLayout,
     QHBoxLayout,
     QLineEdit,
@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 
 from ...styles import load_stylesheet
 
+from Application.ui.dialogs.file_picker import ControllerFileDialog
 from Application.ui.Settings.Logger import log_warning
 
 
@@ -122,14 +123,14 @@ class ApplicationEditorDialog(QDialog):
             str(Path.home() / ".local" / "bin"),
         ]
         start_dir = next((path for path in possible_paths if Path(path).exists()), str(Path.home()))
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_path, _ = ControllerFileDialog.get_open_file_name(
             self, "Select Application Executable", start_dir, "All Files (*)"
         )
         if file_path:
             self.cmd_input.setText(file_path)
 
     def browse_profile(self):
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_path, _ = ControllerFileDialog.get_open_file_name(
             self, "Select AntiMicroX Profile", str(Path.home()), "AMXP Files (*.amxp);;All Files (*)"
         )
         if file_path:
