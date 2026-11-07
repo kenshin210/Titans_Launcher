@@ -51,7 +51,7 @@ from .core.time_sync import fetch_ntp_time, start_ntp_sync_thread
 from .core.weather import fetch_current_weather
 from .ui.InstallApps import AppsHubWidget
 from .ui.Settings.tab_style import tab_widget_stylesheet
-from .ui.Settings.AsyncTask import TaskRunnerMixin
+from .ui.Settings.AsyncTask import TaskRunnerMixin, cleanup_all_tasks
 from .ui.controller_navigation import (
     handle_focused_widget_input,
     handle_modal_input,
@@ -461,7 +461,11 @@ class MainApp(QWidget, TaskRunnerMixin):
         if controller_thread is not None and controller_thread.isRunning():
             log_info("Stopping controller polling thread during launcher shutdown.")
             controller_thread.stop()
-            controller_thread.wait()
+            if not controller_thread.wait(5000):
+                log_warning("Controller thread did not stop within timeout.")
+
+        log_info("Cleaning up async tasks during launcher shutdown.")
+        cleanup_all_tasks(timeout_ms=3000)
 
         event.accept()
 

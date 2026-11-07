@@ -43,6 +43,20 @@ class AsyncTask(QThread):
 _ACTIVE_TASKS = set()
 
 
+def cleanup_all_tasks(timeout_ms=5000):
+    """Wait for all active async tasks to complete before shutdown."""
+    if not _ACTIVE_TASKS:
+        return
+    
+    for task in list(_ACTIVE_TASKS):
+        if task.isRunning():
+            task.requestInterruption()
+    
+    for task in list(_ACTIVE_TASKS):
+        if task.isRunning():
+            task.wait(timeout_ms // len(_ACTIVE_TASKS))
+
+
 class TaskRunnerMixin:
     """Runs a callable off the UI thread and delivers the result to a callback."""
 
