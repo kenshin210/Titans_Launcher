@@ -255,14 +255,13 @@ def handle_focused_widget_input(action):
 
     field = focused_text_field()
     if field is not None and action == "select":
-        text, accepted = OnScreenKeyboard.get_text(
+        _, accepted = OnScreenKeyboard.get_text(
             field.window(),
             field.placeholderText() or "Enter text",
             field.text(),
             field.echoMode() != QLineEdit.EchoMode.Normal,
+            target_field=field,
         )
-        if accepted:
-            field.setText(text)
         return True
 
     if isinstance(widget, QAbstractScrollArea) and action in ("up", "down"):
