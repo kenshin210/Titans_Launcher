@@ -11,14 +11,17 @@ from pathlib import Path
 import cv2
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QHBoxLayout, QPushButton, QVBoxLayout, QLabel,
-    QDialog, QMessageBox, QToolButton, QMenu,
+    QDialog, QMessageBox, QToolButton, QMenu, QLineEdit,
     QStackedWidget, QGraphicsOpacityEffect, QTabWidget
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QSize, QPropertyAnimation, QEasingCurve, QRect,
     pyqtSignal, QPoint, QParallelAnimationGroup
 )
-from PyQt6.QtGui import QImage, QPixmap, QIcon, QAction
+from PyQt6 import sip
+from PyQt6.QtGui import (
+    QImage, QPixmap, QIcon, QAction, QColor, QFont, QPalette, QKeySequence, QShortcut,
+)
 from .styles import load_stylesheet
 
 from Application.ui.Settings.Logger import (
@@ -39,13 +42,15 @@ from .core.config import (
     load_config,
     save_config,
 )
+from .core.session_manager import SessionManager
+from .core.window_activation import WindowActivationManager
 from .core.controller import (
     PYGAME_AVAILABLE,
     PygameControllerThread,
     load_controller_bindings,
     map_raw_input,
 )
-from .core.browser_controller import BrowserController
+from .core.browser_controller import BrowserController, VirtualKeyboard
 from .core.proxy import proxy_environment
 from .core.sound import NavigationSoundPlayer
 from .core.time_sync import fetch_ntp_time, start_ntp_sync_thread
@@ -61,9 +66,17 @@ from .ui.controller_navigation import (
     handle_settings_navigation,
 )
 from .ui.dialogs.app_editor import ApplicationEditorDialog
+from .ui.dialogs.on_screen_keyboard import OnScreenKeyboard, focused_text_field
 from .ui.dialogs.themed_message_box import ThemedMessageBox
 from .ui.widgets.animated_button import AnimatedLauncherButton
 from .ui.widgets.battery_indicator import BatteryIndicator
+from .ui.widgets.wifi_indicator import WiFiIndicator
+from .ui.widgets.app_switcher import AppSwitcherWidget
+from .core.privilege_manager import get_privilege_manager
+from .core.sudo_cache import get_credential_cache
+from .core.home_profiles import application_names, normalize_home_profiles, ordered_home_applications
+from .ui.Settings.controller_focus import SettingsFocusOverlay
+from .ui.widgets.control_centre_overlay import ControlCentreOverlay
 
 class MainApp(QWidget, TaskRunnerMixin):
     app_finished_signal = pyqtSignal()
@@ -72,11 +85,15 @@ class MainApp(QWidget, TaskRunnerMixin):
         super().__init__()
         log_info("Starting Titans HTPC Launcher...")
         self.config = load_config()
+        self._base_application_font = QApplication.font()
+        self._base_application_palette = QApplication.palette()
         self.controller_capture_active = False
         self.active_app_process = None
         self.active_app_controller_close_enabled = False
         self.browser_controller = None
         self.browser_controller_error = None
+        self.shortcut_keyboard = None
+        self.shortcut_keyboard_error = None
         self.launcher_sleeping = False
         self.controller_back_suppressed_until = 0.0
         self.reload_controller_profile()
@@ -84,16 +101,35 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.background_video_active = False
         self.current_ntp_time = datetime.now()
 
+        # Initialize privilege escalation (polkit/sudo with credential caching)
+        self.privilege_manager = get_privilege_manager()
+        self.credential_cache = get_credential_cache()
+
         self.app_finished_signal.connect(self.on_app_finished)
 
         self.nav_sound = NavigationSoundPlayer(self.config)
         self.initUI()
+        self._control_centre_shortcut = QShortcut(
+            QKeySequence(self.config.get("_control_centre_shortcut", "Ctrl+Shift+Space")),
+            self,
+        )
+        self._control_centre_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._control_centre_shortcut.activated.connect(self.show_control_centre)
+        self.apply_accessibility_settings()
+        self.session_manager = SessionManager()
+        self.session_manager.update_heartbeat()
+        self.session_heartbeat_timer = QTimer(self)
+        self.session_heartbeat_timer.timeout.connect(self.session_manager.update_heartbeat)
+        self.session_heartbeat_timer.start(1000)
         QApplication.instance().focusChanged.connect(self.on_focus_changed)
         self.start_ntp_sync_thread()
 
         if PYGAME_AVAILABLE:
             self.controller_thread = PygameControllerThread(self)
             self.controller_thread.raw_input.connect(self.handle_controller_input)
+            self.controller_thread.keyboard_shortcut.connect(self.toggle_shortcut_keyboard)
+            self.controller_thread.browser_pointer.connect(self.handle_browser_pointer)
+            self.controller_thread.browser_pointer_error.connect(self.handle_browser_pointer_error)
             self.controller_thread.start()
 
     def reload_controller_profile(self):
@@ -104,6 +140,16 @@ class MainApp(QWidget, TaskRunnerMixin):
         if self.controller_capture_active:
             return
         action = map_raw_input(input_name, self.controller_bindings)
+        if self.shortcut_keyboard_error is not None:
+            if action in ("select", "back"):
+                self.shortcut_keyboard_error.accept()
+            return
+        if self.shortcut_keyboard is not None:
+            if action:
+                self.shortcut_keyboard.handle_controller_action(action)
+            return
+        if not self.launcher_sleeping and not self.isHidden() and QApplication.activeWindow() is None:
+            return
         if self.launcher_sleeping or self.isHidden():
             if (
                 action == "close_app"
@@ -120,10 +166,7 @@ class MainApp(QWidget, TaskRunnerMixin):
                 try:
                     self.browser_controller.handle_action(action)
                 except OSError as error:
-                    log_error(f"Browser controller input failed: {error}")
-                    self.browser_controller_error = str(error)
-                    self.browser_controller.close()
-                    self.browser_controller = None
+                    self.disable_browser_controller(error)
             return
         if action == "back" and time.monotonic() < self.controller_back_suppressed_until:
             return
@@ -153,6 +196,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             direction = -1 if action == "previous_tab" else 1
             if self.stacked_widget.currentWidget() == self.settings_page and settings_widget:
                 settings_widget.navigate_embedded_tabs(direction)
+
             elif self.stacked_widget.currentWidget() == self.home_page and self.applications_module_enabled():
                 self.home_tabs.setCurrentIndex((self.home_tabs.currentIndex() + direction) % self.home_tabs.count())
         elif action == "select":
@@ -167,6 +211,106 @@ class MainApp(QWidget, TaskRunnerMixin):
                 self.show_home_page()
             else:
                 self.exit_launcher()
+
+    def handle_browser_pointer(self, x, y, left_trigger, right_trigger):
+        if self.launcher_sleeping and self.browser_controller:
+            try:
+                self.browser_controller.handle_pointer(x, y, left_trigger, right_trigger)
+            except OSError as error:
+                self.disable_browser_controller(error)
+
+    def toggle_shortcut_keyboard(self):
+        if self.controller_capture_active:
+            return
+        if self.shortcut_keyboard_error is not None:
+            self.shortcut_keyboard_error.accept()
+            return
+        if self.shortcut_keyboard is not None:
+            self.shortcut_keyboard.reject()
+            return
+        external = self.launcher_sleeping or self.isHidden() or QApplication.activeWindow() is None
+        field = None if external else focused_text_field()
+        device = None
+        owned_device = False
+        if external:
+            device = self.browser_controller
+            if device is None:
+                try:
+                    device = VirtualKeyboard()
+                    owned_device = True
+                except (ImportError, OSError) as error:
+                    log_error(f"Could not enable external on-screen keyboard: {error}")
+                    self.show_shortcut_keyboard_error(
+                        f"External text entry requires python-evdev and write access to /dev/uinput:\n{error}",
+                    )
+                    return
+            dialog = OnScreenKeyboard(None, "Type in active application", theme_color=self.get_theme_color())
+        else:
+            if field is None:
+                self.show_error_overlay("On-screen Keyboard", "Select a text field first, then press Xbox + B.")
+                return
+            dialog = OnScreenKeyboard(
+                field.window(), field.placeholderText() or "Enter text", field.text(),
+                field.echoMode() != QLineEdit.EchoMode.Normal, theme_color=self.get_theme_color()
+            )
+        self.shortcut_keyboard = dialog
+        dialog.finished.connect(
+            lambda result: self.finish_shortcut_keyboard(dialog, result, field, device, owned_device)
+        )
+        if external:
+            dialog.show_without_focus()
+        else:
+            dialog.open()
+
+    def finish_shortcut_keyboard(self, dialog, result, field, device, owned_device):
+        if self.shortcut_keyboard is not dialog:
+            return
+        self.shortcut_keyboard = None
+        try:
+            if result == QDialog.DialogCode.Accepted and device is not None:
+                try:
+                    device.type_text(dialog.result_text)
+                except ValueError as error:
+                    log_error(f"External keyboard input failed: {error}")
+                    self.show_shortcut_keyboard_error(str(error))
+                except OSError as error:
+                    if device is self.browser_controller:
+                        self.disable_browser_controller(error)
+                    else:
+                        log_error(f"External keyboard input failed: {error}")
+                        self.show_shortcut_keyboard_error(str(error))
+            elif result == QDialog.DialogCode.Accepted and field is not None and not sip.isdeleted(field):
+                field.setText(dialog.result_text)
+        finally:
+            if owned_device:
+                device.close()
+            dialog.deleteLater()
+
+    def show_shortcut_keyboard_error(self, message):
+        dialog = ThemedMessageBox(None, title="On-screen Keyboard", message=message, theme_color=self.get_theme_color())
+        dialog.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        dialog.no_btn.hide()
+        dialog.yes_btn.setText("OK")
+        self.shortcut_keyboard_error = dialog
+
+        def closed(_result):
+            self.shortcut_keyboard_error = None
+            dialog.deleteLater()
+
+        dialog.finished.connect(closed)
+        dialog.show()
+
+    def handle_browser_pointer_error(self, message):
+        if self.launcher_sleeping and self.browser_controller:
+            self.browser_controller_error = f"Browser mouse unavailable: {message}"
+
+    def disable_browser_controller(self, error):
+        log_error(f"Browser controller input failed: {error}")
+        self.browser_controller_error = str(error)
+        self.controller_thread.set_browser_pointer_enabled(False)
+        self.browser_controller.close()
+        self.browser_controller = None
 
     def handle_confirmation_dialog_input(self, action):
         if action not in ("left", "right"):
@@ -298,8 +442,12 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.home_tabs.addTab(self.home_tab, "Home")
         self.install_apps_widget = AppsHubWidget(self)
         self.home_tabs.addTab(self.install_apps_widget, "Applications")
+        self.app_switcher_widget = AppSwitcherWidget(self)
+        self.app_switcher_widget.app_selected.connect(self.activate_managed_app)
+        self.home_tabs.addTab(self.app_switcher_widget, "Running Apps")
         home_page_layout.addWidget(self.home_tabs)
         self.apply_applications_module()
+        self.home_tabs.currentChanged.connect(self.animate_home_transition)
 
         self.main_layout = QVBoxLayout(self.home_tab)
         self.main_layout.setContentsMargins(40, 40, 40, 40)
@@ -339,6 +487,11 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.update_power_button_display()
         self.battery_indicator = BatteryIndicator(self.config, self)
         top_layout.addWidget(self.battery_indicator, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        
+        # Add WiFi indicator between battery and power button
+        self.wifi_indicator = WiFiIndicator(self.config, self)
+        top_layout.addWidget(self.wifi_indicator, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        
         top_layout.addSpacing(15)
         top_layout.addWidget(self.power_btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
 
@@ -388,6 +541,19 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.update_settings_button_style()
         self.config_btn.clicked.connect(self.show_settings_page)
         bottom_layout.addStretch()
+        self.control_centre_btn = QPushButton("☰ Control Centre")
+        self.control_centre_btn.setObjectName("launcherSettingsButton")
+        self.control_centre_btn.setStyleSheet(
+            load_stylesheet(
+                theme_color=self.get_theme_color(),
+                border_radius=self.get_border_radius(),
+            )
+        )
+        self.control_centre_btn.clicked.connect(self.show_control_centre)
+        bottom_layout.addWidget(
+            self.control_centre_btn,
+            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
+        )
         bottom_layout.addWidget(self.config_btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
         self.apps_layout = QHBoxLayout()
@@ -413,6 +579,7 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         self.stacked_widget.addWidget(self.home_page)
         self.stacked_widget.addWidget(self.settings_page)
+        self.home_focus_overlay = SettingsFocusOverlay(self, scope=self.home_tab)
 
         self.content_widget.raise_()
 
@@ -450,6 +617,14 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def closeEvent(self, event):
         log_info("Checking async tasks before launcher shutdown.")
+        system_update = getattr(self, "_system_update", None)
+        if system_update is not None and system_update.process is not None:
+            self.show_error_overlay(
+                "Package Operation Still Running",
+                "Wait for the system update or package repair to finish before closing the launcher."
+            )
+            event.ignore()
+            return
         if not cleanup_all_tasks(timeout_ms=3000):
             self.show_error_overlay(
                 "Tasks Still Running",
@@ -471,18 +646,32 @@ class MainApp(QWidget, TaskRunnerMixin):
                 event.ignore()
                 return
 
+        if self.shortcut_keyboard is not None:
+            self.shortcut_keyboard.reject()
+        if self.shortcut_keyboard_error is not None:
+            self.shortcut_keyboard_error.reject()
         if hasattr(self, "clock_timer"):
             self.clock_timer.stop()
         if hasattr(self, "weather_timer"):
             self.weather_timer.stop()
         if hasattr(self, "video_timer"):
             self.video_timer.stop()
+        if hasattr(self, "session_heartbeat_timer"):
+            self.session_heartbeat_timer.stop()
+        if hasattr(self, "app_switcher_widget"):
+            self.app_switcher_widget.update_timer.stop()
         if self.browser_controller:
             self.browser_controller.close()
             self.browser_controller = None
         if self.cap:
             self.cap.release()
             self.cap = None
+
+        # Clean up credential cache on app exit
+        if hasattr(self, "credential_cache"):
+            self.credential_cache.destroy()
+        if hasattr(self, "privilege_manager"):
+            self.privilege_manager.end_session()
 
         ntp_stop_event = getattr(self, "_ntp_stop_event", None)
         if ntp_stop_event is not None:
@@ -620,6 +809,93 @@ class MainApp(QWidget, TaskRunnerMixin):
         custom_colors = self.config.get("_custom_colors", {})
         return custom_colors.get(theme, "#DC143C")
 
+    def update_control_centre_shortcut(self, sequence):
+        shortcut = getattr(self, "_control_centre_shortcut", None)
+        if shortcut is not None:
+            shortcut.setKey(QKeySequence(sequence))
+
+    def show_control_centre(self):
+        overlay = getattr(self, "control_centre_overlay", None)
+        if overlay is not None and overlay.isVisible():
+            overlay.reject()
+            return
+        overlay = ControlCentreOverlay(self)
+        self.control_centre_overlay = overlay
+        overlay.finished.connect(
+            lambda _result, dialog=overlay: setattr(self, "control_centre_overlay", None)
+            if getattr(self, "control_centre_overlay", None) is dialog else None
+        )
+        overlay.open()
+
+    def apply_home_profile(self, name):
+        profiles = normalize_home_profiles(self.config)
+        if name not in profiles:
+            return False
+        self.config["_active_home_profile"] = name
+        self.config["_home_profiles"] = profiles
+        self.save_config_file()
+        self.refresh_applications_view()
+        return True
+
+    def animations_enabled(self):
+        return bool(
+            self.config.get("_enable_animations", True)
+            and not self.config.get("_reduce_motion", False)
+        )
+
+    def animate_home_transition(self, *_args):
+        if not self.animations_enabled() or not hasattr(self, "home_tabs"):
+            return
+        page = self.home_tabs.currentWidget()
+        if page is None or not page.isVisible() or page.graphicsEffect() is not None:
+            return
+        effect = QGraphicsOpacityEffect(page)
+        page.setGraphicsEffect(effect)
+        effect.setOpacity(0.0)
+        animation = QPropertyAnimation(effect, b"opacity", self)
+        animation.setDuration(220)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.finished.connect(lambda target=page: target.setGraphicsEffect(None))
+        animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def apply_accessibility_settings(self):
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        font = QFont(self._base_application_font)
+        if self.config.get("_large_text", False):
+            font.setPointSize(max(1, font.pointSize() + 3))
+        app.setFont(font)
+
+        if self.config.get("_high_contrast", False):
+            palette = QPalette()
+            palette.setColor(QPalette.ColorRole.Window, QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.WindowText, QColor("#FFFFFF"))
+            palette.setColor(QPalette.ColorRole.Base, QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.Text, QColor("#FFFFFF"))
+            palette.setColor(QPalette.ColorRole.Button, QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.ButtonText, QColor("#FFFFFF"))
+            palette.setColor(QPalette.ColorRole.Highlight, QColor("#FFFF00"))
+            palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#000000"))
+            palette.setColor(QPalette.ColorRole.Link, QColor("#FFFF00"))
+            app.setPalette(palette)
+        else:
+            app.setPalette(self._base_application_palette)
+
+        if hasattr(self, "control_centre_btn"):
+            self.control_centre_btn.setStyleSheet(
+                load_stylesheet(
+                    theme_color=self.get_theme_color(),
+                    border_radius=self.get_border_radius(),
+                )
+            )
+        if hasattr(self, "home_focus_overlay"):
+            self.home_focus_overlay.refresh()
+
     def get_border_radius(self):
         shape = self.config.get("_button_shape", "Rounded Square")
         if shape == "Circle":
@@ -639,6 +915,10 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         if hasattr(self, 'config_btn'):
             self.config_btn.setStyleSheet(
+                load_stylesheet(theme_color=theme_color, border_radius=border_radius)
+            )
+        if hasattr(self, "control_centre_btn"):
+            self.control_centre_btn.setStyleSheet(
                 load_stylesheet(theme_color=theme_color, border_radius=border_radius)
             )
 
@@ -741,15 +1021,15 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         theme_color = self.get_theme_color()
         border_radius = self.get_border_radius()
-        enable_anim = self.config.get("_enable_animations", True)
+        enable_anim = self.animations_enabled()
         enable_glitch = self.config.get("_enable_glitch", False)
         self.update_settings_button_style()
 
         first_app_btn = None
 
-        for name, data in self.config.items():
-            if name.startswith("_"):
-                continue
+        names = application_names(self.config)
+        for name in ordered_home_applications(self.config, names):
+            data = self.config[name]
 
             btn = AnimatedLauncherButton(self, enable_animations=enable_anim, enable_glitch=enable_glitch, theme_color=theme_color)
             btn.setText(name)
@@ -776,6 +1056,8 @@ class MainApp(QWidget, TaskRunnerMixin):
             first_app_btn.setFocus()
 
         QTimer.singleShot(100, self.refresh_button_geometries)
+        if self.home_tabs.currentWidget() is self.home_tab and self.home_page.isVisible():
+            QTimer.singleShot(0, self.animate_home_transition)
 
     def launch_app(self, data):
         executable = data.get("command", "").strip()
@@ -898,6 +1180,8 @@ class MainApp(QWidget, TaskRunnerMixin):
             return
 
         self.enter_sleep_state()
+        if self.browser_controller:
+            self.controller_thread.set_browser_pointer_enabled(True)
 
         def wait_and_restore():
             proc.wait()
@@ -920,6 +1204,10 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def on_app_finished(self):
         log_info("Restoring launcher interface after application exit.")
+        if self.shortcut_keyboard is not None:
+            self.shortcut_keyboard.reject()
+        if hasattr(self, "controller_thread"):
+            self.controller_thread.set_browser_pointer_enabled(False)
         if self.browser_controller:
             self.browser_controller.close()
             self.browser_controller = None
@@ -945,7 +1233,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         self._pending_settings_section = section if isinstance(section, str) else None
 
         log_info("Opening Settings view.")
-        enable_anim = self.config.get("_enable_animations", True)
+        enable_anim = self.animations_enabled()
         if not enable_anim:
             try:
                 self.build_settings_view(self.config.get("_advanced_mode", False))
@@ -968,7 +1256,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             return
 
         log_info("Returning to Home Launcher view.")
-        enable_anim = self.config.get("_enable_animations", True)
+        enable_anim = self.animations_enabled()
         if not enable_anim:
             self.stacked_widget.setCurrentWidget(self.home_page)
             self.refresh_applications_view()
@@ -1235,6 +1523,17 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def open_configurator(self):
         self.show_settings_page()
+
+    def activate_managed_app(self, app_id):
+        """Raise a managed app window through the available compositor."""
+        app_info = self.app_switcher_widget.app_manager.get_app_info(app_id)
+        if app_info is None or app_info.pid is None:
+            self.show_error_overlay("App Unavailable", "The selected application is not running.")
+            return
+        success, message = WindowActivationManager().activate(app_info.pid)
+        if not success:
+            log_error(f"Could not switch to managed app {app_id}: {message}")
+            self.show_error_overlay("App Switch Failed", message)
 
     def build_settings_view(self, is_advanced):
         selected_section = getattr(self, "current_settings_widget", None)

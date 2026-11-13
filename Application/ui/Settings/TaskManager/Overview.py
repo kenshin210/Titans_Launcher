@@ -12,7 +12,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QColor, QPainter, QPen
 
+from Application.core.battery import read_xbox_battery
+from Application.ui.Settings.AsyncTask import TaskRunnerMixin
 from Application.ui.Settings.Logger import log_warning
+from Application.ui.widgets.battery_indicator import BatteryIcon
 
 device_styles = import_module("Application.ui.Settings.About Device.DeviceStyles")
 
@@ -315,7 +318,7 @@ class _HistoryChart(QWidget):
         painter.end()
 
 
-class OverviewWidget(QWidget):
+class OverviewWidget(QWidget, TaskRunnerMixin):
     def __init__(self, launcher=None, parent=None):
         super().__init__(parent)
         self.launcher = launcher
@@ -347,6 +350,11 @@ class OverviewWidget(QWidget):
         topbar_layout.addWidget(title)
         topbar_layout.addStretch()
         topbar_layout.addWidget(self.status_label)
+        self.controller_battery_icon = BatteryIcon()
+        self.controller_battery_label = QLabel("Xbox battery: --")
+        self.controller_battery_label.setToolTip("Xbox controller battery level, when reported by the system.")
+        topbar_layout.addWidget(self.controller_battery_icon)
+        topbar_layout.addWidget(self.controller_battery_label)
         content_layout.addWidget(topbar)
 
         grid = QGridLayout()
@@ -440,6 +448,10 @@ class OverviewWidget(QWidget):
         self._previous_cpu = {}
         self._previous_network = None
         self._previous_update = None
+        self._battery_busy = False
+        self._battery_timer = QTimer(self)
+        self._battery_timer.setInterval(30000)
+        self._battery_timer.timeout.connect(self.refresh_controller_battery)
         self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self.refresh_metrics)
@@ -463,10 +475,34 @@ class OverviewWidget(QWidget):
         self.apply_theme()
         self.refresh_metrics()
         self._timer.start()
+        self.refresh_controller_battery()
+        self._battery_timer.start()
 
     def hideEvent(self, event):
         self._timer.stop()
+        self._battery_timer.stop()
         super().hideEvent(event)
+
+    def refresh_controller_battery(self):
+        if self._battery_busy:
+            return
+        self._battery_busy = True
+
+        def done(result):
+            self._battery_busy = False
+            if isinstance(result, Exception):
+                log_warning(f"Could not read Xbox controller battery: {result}")
+                result = None
+            available = result is not None
+            percent = result["percent"] if available else None
+            charging = result["charging"] if available else False
+            self.controller_battery_icon.set_state(percent, charging, available)
+            self.controller_battery_label.setText(
+                f"Xbox battery: {percent}%" + (" (charging)" if charging else "")
+                if available else "Xbox battery: unavailable"
+            )
+
+        self.run_async(read_xbox_battery, done)
 
     def apply_theme(self):
         theme_color = QColor(

@@ -1,13 +1,17 @@
+import codecs
+import re
 import shutil
 from importlib import import_module
 from pathlib import Path
 
-from PyQt6.QtCore import QProcess
+from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, pyqtSignal
 from PyQt6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -16,6 +20,8 @@ from PyQt6.QtWidgets import (
 from Application.styles import load_stylesheet
 from Application.ui.Settings.AsyncTask import TaskRunnerMixin, run_command
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
+from Application.core.privilege_manager import get_privilege_manager
+from Application.core.sudo_cache import get_credential_cache
 
 device_styles = import_module("Application.ui.Settings.About Device.DeviceStyles")
 
@@ -32,15 +38,160 @@ def is_arch_based():
     return False
 
 
-# Kept at module level so closing Settings never kills a running pacman.
-_RUNNING_PROCESSES = set()
+class SystemUpdate(QObject):
+    changed = pyqtSignal()
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.process = None
+        self.status = ""
+        self.output = ""
+        self.total = 0
+        self.started = 0
+        self.progress = None
+        self.progress_text = "Waiting to update"
+        self._pending = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self.audit_operation = None
+        self.audit_operation_id = None
+
+    def start(
+        self,
+        command,
+        operation="update",
+        input_text=None,
+        audit_operation=None,
+        audit_operation_id=None,
+    ):
+        if self.process is not None:
+            return
+        self.operation = operation
+        self.audit_operation = audit_operation
+        self.audit_operation_id = audit_operation_id
+        self.status = f"{'Repairing packages' if operation == 'repair' else 'Updating'}... authenticate if prompted."
+        self.output = ""
+        self.total = self.started = 0
+        self.progress = None
+        self.progress_text = "Preparing repair..." if operation == "repair" else "Preparing update..."
+        self._pending = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        process = QProcess(self)
+        self.process = process
+        environment = QProcessEnvironment.systemEnvironment()
+        environment.insert("LC_ALL", "C")
+        process.setProcessEnvironment(environment)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.readyReadStandardOutput.connect(self._read_output)
+        process.finished.connect(self._finished)
+        process.errorOccurred.connect(self._error)
+        if input_text is not None:
+            def send_input():
+                process.write(input_text.encode("utf-8"))
+                process.closeWriteChannel()
+            process.started.connect(send_input)
+        self.changed.emit()
+        process.start(command[0], command[1:])
+
+    def _read_output(self):
+        text = self._decoder.decode(bytes(self.process.readAllStandardOutput()))
+        if not text:
+            return
+        self.output = (self.output + text)[-200000:]
+        self._pending += text
+        lines = re.split(r"[\r\n]", self._pending)
+        self._pending = lines.pop()
+        for line in lines:
+            self._parse_line(line)
+        self.changed.emit()
+
+    def _parse_line(self, line):
+        match = re.search(r"\bPackages \((\d+)\)", line)
+        if match:
+            self.total = int(match.group(1))
+        if re.search(r"^\s*(?:\(\s*\d+/\s*\d+\)\s*)?"
+                     r"(?:installing|upgrading|reinstalling|downgrading|removing)\s+\S+", line):
+            self.started += 1
+            if self.total:
+                self.progress = min(99, (self.started - 1) * 100 // self.total)
+                self.progress_text = f"Package {min(self.started, self.total)} of {self.total}"
+        elif line.startswith(":: Running post-transaction hooks"):
+            self.progress = None
+            self.progress_text = "Finishing repair..." if self.operation == "repair" else "Finishing update..."
+
+    def _finished(self, exit_code, exit_status):
+        self._read_output()
+        tail = self._decoder.decode(b"", final=True)
+        if tail:
+            self.output = (self.output + tail)[-200000:]
+            self._pending += tail
+        if self._pending:
+            self._parse_line(self._pending)
+        if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
+            log_info(f"System {self.operation} completed.")
+            self.status = (
+                "Package repair complete. Run File Check again to verify; restart if core packages changed."
+                if self.operation == "repair"
+                else "Update complete. Restart the device to apply kernel and core updates."
+            )
+            self.progress = 100
+            self.progress_text = "Repair complete" if self.operation == "repair" else "Update complete"
+        else:
+            log_warning(f"System {self.operation} exited with code {exit_code} ({exit_status.name}).")
+            self.status = f"{self.operation.title()} failed (exit code {exit_code}). See the log below."
+            self.progress = 0
+            self.progress_text = f"{self.operation.title()} failed"
+        if not self._finish_audit(
+            "succeeded" if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0 else "failed",
+            exit_code,
+        ):
+            self.status += " Privilege audit log could not be updated."
+        self._release_process()
+
+    def _error(self, error):
+        if error == QProcess.ProcessError.FailedToStart:
+            log_error(f"System {self.operation} failed to start: {self.process.errorString()}")
+            self.status = f"Could not start the {self.operation} command: {self.process.errorString()}"
+            self.progress = 0
+            self.progress_text = f"{self.operation.title()} failed"
+            if not self._finish_audit("failed", None):
+                self.status += " Privilege audit log could not be updated."
+            self._release_process()
+        else:
+            log_warning(f"System update process error: {self.process.errorString()}")
+            self.status = f"Update process error: {self.process.errorString()}"
+            self.changed.emit()
+
+    def _finish_audit(self, status, return_code):
+        if self.audit_operation_id is None:
+            return True
+        from Application.core.privilege_manager import get_privilege_manager
+
+        operation_id = self.audit_operation_id
+        operation = self.audit_operation
+        self.audit_operation_id = None
+        return get_privilege_manager().complete_operation(
+            operation_id,
+            operation,
+            status,
+            return_code=return_code,
+        )
+
+    def _release_process(self):
+        process = self.process
+        self.process = None
+        process.deleteLater()
+        self.changed.emit()
 
 
 class SystemUpdateWidget(QWidget, TaskRunnerMixin):
     def __init__(self, launcher=None):
         super().__init__()
         self.launcher = launcher
-        self.process = None
+        owner = launcher if launcher is not None else QApplication.instance()
+        self.owner = owner
+        if not hasattr(owner, "_system_update"):
+            owner._system_update = SystemUpdate(owner)
+        self.update_task = owner._system_update
         theme_color = launcher.get_theme_color() if launcher else "#DC143C"
 
         layout = QVBoxLayout(self)
@@ -64,36 +215,45 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         self.check_button.clicked.connect(self.check_updates)
         self.update_button.clicked.connect(self.start_update)
 
+        self.progress_label = QLabel("Waiting to update")
+        layout.addWidget(self.progress_label)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
+
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setPlaceholderText("Pending updates and update progress appear here.")
         layout.addWidget(self.output, stretch=1)
 
         self.pacman = shutil.which("pacman")
-        self.privilege_command = self._find_privilege_command()
+        self.privilege_manager = get_privilege_manager()
+        self.credential_cache = get_credential_cache()
+        
         if not is_arch_based() or not self.pacman:
             self.status.setText("System updates are only available on Arch-based systems with pacman.")
             self.check_button.setEnabled(False)
             self.update_button.setEnabled(False)
-        elif not self.privilege_command:
+        elif not self.privilege_manager.check_operation_access("system_update")[0]:
             self.status.setText(
-                "Checking works, but updating needs pkexec (polkit) or passwordless sudo."
+                "System updates need the administrator role and privilege escalation "
+                "(polkit/pkexec or sudo)."
             )
             self.update_button.setEnabled(False)
         else:
             self.status.setText("Press Check for Updates to see what is available.")
-
-    @staticmethod
-    def _find_privilege_command():
-        if shutil.which("pkexec"):
-            return ["pkexec"]
-        if shutil.which("sudo"):
-            return ["sudo", "-n"]
-        return None
+        self.update_task.changed.connect(self._sync_update)
+        if self.update_task.status:
+            self._sync_update()
 
     def check_updates(self):
+        file_check = getattr(self.owner, "_file_check", None)
+        if self.update_task.process is not None or (file_check and file_check.busy):
+            return
         self.status.setText("Checking for updates...")
         self.check_button.setEnabled(False)
+        self.update_button.setEnabled(False)
         self.output.clear()
         checkupdates = shutil.which("checkupdates")
 
@@ -105,6 +265,9 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
 
         def done(result):
             self.check_button.setEnabled(True)
+            self.update_button.setEnabled(
+                self.privilege_manager.check_operation_access("system_update")[0]
+            )
             if isinstance(result, Exception):
                 self.status.setText(f"Could not check for updates: {result}")
                 return
@@ -126,7 +289,8 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         self.run_async(work, done)
 
     def start_update(self):
-        if self.process is not None:
+        file_check = getattr(self.owner, "_file_check", None)
+        if self.update_task.process is not None or (file_check and file_check.busy):
             return
         answer = QMessageBox.question(
             self,
@@ -137,44 +301,43 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         if answer != QMessageBox.StandardButton.Yes:
             return
 
-        command = [*self.privilege_command, self.pacman, "-Syu", "--noconfirm"]
-        self.output.clear()
-        self.status.setText("Updating... authenticate if prompted.")
-        self.check_button.setEnabled(False)
-        self.update_button.setEnabled(False)
-        log_info("Starting system update: pacman -Syu --noconfirm")
-
-        self.process = QProcess()
-        _RUNNING_PROCESSES.add(self.process)
-        self.process.finished.connect(
-            lambda *_, proc=self.process: (_RUNNING_PROCESSES.discard(proc), proc.deleteLater())
+        allowed, reason, audit_operation_id = self.privilege_manager.authorize_operation(
+            "system_update"
         )
-        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self.process.readyReadStandardOutput.connect(self._append_output)
-        self.process.finished.connect(self._update_finished)
-        self.process.errorOccurred.connect(self._update_error)
-        self.process.start(command[0], command[1:])
+        if not allowed:
+            self.status.setText(f"System update denied: {reason}")
+            self.update_button.setEnabled(False)
+            return
 
-    def _append_output(self):
-        text = bytes(self.process.readAllStandardOutput()).decode("utf-8", errors="replace")
-        self.output.appendPlainText(text.rstrip("\n"))
+        command = [self.pacman, "-Syu", "--noconfirm", "--noprogressbar"]
+        log_info("Starting system update: pacman -Syu --noconfirm")
+        self.update_task.start(
+            self.privilege_manager.build_command(command),
+            audit_operation="system_update",
+            audit_operation_id=audit_operation_id,
+        )
 
-    def _finish_process(self):
-        self.check_button.setEnabled(True)
-        self.update_button.setEnabled(True)
-        self.process = None
 
-    def _update_finished(self, exit_code, _status):
-        if exit_code == 0:
-            log_info("System update completed.")
-            self.status.setText("Update complete. Restart the device to apply kernel and core updates.")
+    def _sync_update(self):
+        self.status.setText(self.update_task.status)
+        self.output.setPlainText(self.update_task.output)
+        self.output.verticalScrollBar().setValue(self.output.verticalScrollBar().maximum())
+        self._sync_controls()
+        self.progress_label.setText(self.update_task.progress_text)
+        if self.update_task.progress is None:
+            self.progress_bar.setRange(0, 0)
         else:
-            log_warning(f"System update exited with code {exit_code}.")
-            self.status.setText(f"Update failed (exit code {exit_code}). See the log below.")
-        self._finish_process()
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(self.update_task.progress)
 
-    def _update_error(self, error):
-        if error == QProcess.ProcessError.FailedToStart:
-            log_error("System update failed to start.")
-            self.status.setText("Could not start the update command.")
-            self._finish_process()
+    def _sync_controls(self):
+        file_check = getattr(self.owner, "_file_check", None)
+        available = self.update_task.process is None and not (file_check and file_check.busy)
+        can_update = (
+            self.privilege_manager
+            and self.privilege_manager.check_operation_access("system_update")[0]
+        )
+        self.check_button.setEnabled(available and bool(self.pacman) and is_arch_based())
+        self.update_button.setEnabled(
+            available and bool(self.pacman) and is_arch_based() and can_update
+        )

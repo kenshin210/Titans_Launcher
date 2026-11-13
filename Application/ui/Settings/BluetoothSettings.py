@@ -110,7 +110,7 @@ class BluetoothSettingsWidget(QWidget, TaskRunnerMixin):
         row.addWidget(label)
         row.addWidget(self.short_name_input, stretch=1)
         use_button = self._make_button("Use Selected Device", self.use_for_battery)
-        clear_button = self._make_button("Remove Indicator", self.clear_battery)
+        clear_button = self._make_button("Use Automatic Xbox", self.clear_battery)
         row.addWidget(use_button)
         row.addWidget(clear_button)
         card_layout.addLayout(row)
@@ -127,8 +127,8 @@ class BluetoothSettingsWidget(QWidget, TaskRunnerMixin):
             self.short_name_input.setText(config.get("_battery_short_name", ""))
         else:
             self.battery_current.setText(
-                "No device selected. Choose a connected controller above to show its "
-                "battery beside the power button."
+                "The Home screen automatically shows an Xbox controller battery. "
+                "Select a device above to show a different Bluetooth battery instead."
             )
 
     def _suggest_short_name(self, current, _previous):

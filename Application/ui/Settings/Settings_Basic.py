@@ -22,6 +22,8 @@ from Application.ui.Settings.WeatherSettings import WeatherSettingsWidget
 from Application.ui.Settings.tab_style import tab_widget_stylesheet, update_tab_styles
 from Application.ui.Settings.controller_focus import SettingsFocusOverlay
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
+from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySettingsWidget
+from Application.ui.Settings.HomeProfilesWidget import HomeProfilesWidget
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -74,6 +76,7 @@ class BasicSettingsWidget(QWidget):
             ("Background", "background", self.create_background_page),
             ("Theme", "theme", self.create_theme_page),
             ("Weather", "weather", lambda: WeatherSettingsWidget(self.launcher)),
+            ("Accessibility", "accessibility", lambda: AccessibilitySettingsWidget(self.launcher)),
         ]
         # Ordered from most to least important; pages are built from this same list.
         self.sections = [
@@ -83,6 +86,7 @@ class BasicSettingsWidget(QWidget):
             ("🔵  Bluetooth", "bluetooth", lambda: BluetoothSettingsWidget(self.launcher)),
             ("🎮  Controller", "controller", lambda: ControllerSettingsWidget(self.launcher)),
             ("🚀  Applications", "applications", self.create_apps_page),
+            ("🏠  Home Screen", "home_profiles", lambda: HomeProfilesWidget(self.launcher)),
             ("📊  Task Manager", "task_manager", lambda: TaskManagerWidget(self.launcher)),
             ("ℹ  About Device", "about_device", lambda: AboutDeviceWidget(self.launcher)),
         ]
@@ -449,7 +453,10 @@ class BasicSettingsWidget(QWidget):
 
         theme_combo = QComboBox()
         theme_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
-        theme_combo.addItems(["Crimson Red", "Cyberpunk Blue", "Emerald Green", "Purple Neon"])
+        theme_combo.addItems([
+            "Crimson Red", "Cyberpunk Blue", "Emerald Green", "Purple Neon",
+            "Colorblind Blue", "Colorblind Orange", "Colorblind Purple",
+        ])
         theme_combo.setCurrentText(self.launcher.config.get("_theme", "Crimson Red"))
 
         form.addRow(QLabel("Theme Color:"), theme_combo)
@@ -461,6 +468,7 @@ class BasicSettingsWidget(QWidget):
             selected_theme = theme_combo.currentText()
             self.launcher.config["_theme"] = selected_theme
             self.launcher.save_config_file()
+            self.launcher.apply_accessibility_settings()
             self.launcher.refresh_applications_view()
             update_tab_styles(self, self.launcher.get_theme_color())
             log_info(f"Basic Settings: Saved theme color '{selected_theme}'")

@@ -121,3 +121,35 @@ def read_battery(address):
                     state["connected"] = True
                 break
     return state
+
+
+def read_xbox_battery():
+    """Find an Xbox controller battery exposed by Linux or a connected BlueZ device."""
+    if POWER_SUPPLY_DIR.is_dir():
+        try:
+            supplies = sorted(POWER_SUPPLY_DIR.iterdir())
+        except OSError:
+            supplies = []
+        for supply in supplies:
+            identity = " ".join((supply.name, _read(supply / "model_name"), _read(supply / "uevent"))).lower()
+            if not any(name in identity for name in ("xbox", "xpad")):
+                continue
+            capacity = _read(supply / "capacity")
+            if capacity.isdigit() and 0 <= int(capacity) <= 100:
+                return {"percent": int(capacity), "charging": _read(supply / "status").lower() == "charging"}
+
+    bluetoothctl = shutil.which("bluetoothctl")
+    if not bluetoothctl:
+        return None
+    result = _run([bluetoothctl, "devices"])
+    if result is None or result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        match = re.match(r"^Device\s+([0-9a-fA-F:]{17})\s+(.+)$", line.strip())
+        if not match or "xbox" not in match.group(2).lower():
+            continue
+        state = read_battery(match.group(1))
+        percent = state["percent"]
+        if state["connected"] is True and percent is not None and 0 <= percent <= 100:
+            return state
+    return None

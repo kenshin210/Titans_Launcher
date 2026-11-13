@@ -21,8 +21,13 @@ KEY_ROWS = [
     list("asdfghjkl'"),
     list("zxcvbnm,.-"),
     list("@_/:;!?#%&"),
+    list("[](){}$^*="),
 ]
-SHIFT_SYMBOLS = {"'": '"', ",": "<", ".": ">", "-": "+", "/": "\\", ":": "=", ";": "*", "_": "~"}
+SHIFT_SYMBOLS = {
+    **dict(zip("1234567890", "!@#$%^&*()")),
+    "'": '"', ",": "<", ".": ">", "-": "+", "/": "\\", ":": "=",
+    ";": "*", "_": "~", "[": "{", "]": "}",
+}
 
 
 class OnScreenKeyboard(QDialog):
@@ -66,9 +71,11 @@ class OnScreenKeyboard(QDialog):
             }}
             QPushButton:checked {{ background-color: {theme_color}; }}
             QPushButton:focus, QPushButton:hover {{ border: 2px solid {theme_color}; }}
+            QPushButton[controllerSelected="true"] {{ border: 2px solid {theme_color}; }}
         """)
 
         self.shift = False
+        self.non_activating = False
         self.result_text = text
 
         outer = QVBoxLayout(self)
@@ -137,9 +144,28 @@ class OnScreenKeyboard(QDialog):
     def _focus_cursor(self):
         row = self.rows[self.cursor_row]
         self.cursor_column = min(self.cursor_column, len(row) - 1)
+        if self.non_activating:
+            for buttons in self.rows:
+                for button in buttons:
+                    selected = button is row[self.cursor_column]
+                    button.setProperty("controllerSelected", selected)
+                    button.style().unpolish(button)
+                    button.style().polish(button)
+                    button.update()
+            return
         for index, button in enumerate(row):
             button.setFocusPolicy(Qt.FocusPolicy.StrongFocus if index == self.cursor_column else Qt.FocusPolicy.NoFocus)
         row[self.cursor_column].setFocus()
+
+    def show_without_focus(self):
+        self.non_activating = True
+        self.setWindowFlags(
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self._focus_cursor()
+        self.show()
 
     def _key_text(self, key):
         if not self.shift:

@@ -19,7 +19,13 @@ from Application.ui.Settings.tab_style import tab_widget_stylesheet
 SystemUpdateWidget = import_module(
     "Application.ui.Settings.About Device.Updates"
 ).SystemUpdateWidget
+FileCheckWidget = import_module(
+    "Application.ui.Settings.About Device.FileCheck"
+).FileCheckWidget
 device_styles = import_module("Application.ui.Settings.About Device.DeviceStyles")
+StorageOverviewWidget = import_module(
+    "Application.ui.Settings.Phase3Settings"
+).StorageOverviewWidget
 
 create_device_page_title = device_styles.create_device_page_title
 style_device_page = device_styles.style_device_page
@@ -277,7 +283,10 @@ class AboutDeviceWidget(QWidget):
         specifications_layout.addLayout(specifications_form)
         specifications_layout.addStretch()
         self.tabs.addTab(self.specifications_page, "Device Specifications")
-        self.tabs.addTab(SystemUpdateWidget(launcher), "System Update")
+        update_page = SystemUpdateWidget(launcher)
+        self.tabs.addTab(update_page, "System Update")
+        self.tabs.addTab(FileCheckWidget(launcher, update_page), "File Check")
+        self.tabs.addTab(StorageOverviewWidget(launcher), "Storage")
         self.tabs.currentChanged.connect(self.update_specifications)
 
     def update_specifications(self, index):

@@ -31,6 +31,13 @@ DEFAULT_CONFIG = {
     "_theme": "Crimson Red",
     "_button_shape": "Rounded Square",
     "_enable_animations": True,
+    "_reduce_motion": False,
+    "_high_contrast": False,
+    "_large_text": False,
+    "_show_focus_indicators": True,
+    "_control_centre_shortcut": "Ctrl+Shift+Space",
+    "_active_home_profile": "Default",
+    "_home_profiles": {"Default": {"order": [], "hidden": []}},
     "_enable_glitch": False,
     "_ntp_server": "nz.pool.ntp.org",
     "_ntp_country": "New Zealand",
@@ -48,6 +55,9 @@ DEFAULT_CONFIG = {
     "_ntp_auto_dst": True,
     "_ntp_timezone": "",
     "_time_format": "12-Hour (AM/PM)",
+    "_sudo_cache_enabled": False,
+    "_sudo_cache_ttl_minutes": 15,
+    "_privilege_prefer_polkit": True,
     "_power_command": "systemctl poweroff",
     "_sleep_command": "systemctl suspend",
     "_restart_command": "systemctl reboot",
@@ -64,6 +74,9 @@ DEFAULT_CONFIG = {
         "Cyberpunk Blue": "#00F0FF",
         "Emerald Green": "#00C853",
         "Purple Neon": "#AA00FF",
+        "Colorblind Blue": "#0072B2",
+        "Colorblind Orange": "#E69F00",
+        "Colorblind Purple": "#CC79A7",
     },
     "Jellyfin": {
         "command": "Jellyfin",
@@ -117,6 +130,13 @@ def load_config():
             "_theme": "Crimson Red",
             "_button_shape": "Rounded Square",
             "_enable_animations": True,
+            "_reduce_motion": False,
+            "_high_contrast": False,
+            "_large_text": False,
+            "_show_focus_indicators": True,
+            "_control_centre_shortcut": "Ctrl+Shift+Space",
+            "_active_home_profile": "Default",
+            "_home_profiles": {"Default": {"order": [], "hidden": []}},
             "_enable_glitch": False,
             "_ntp_server": "nz.pool.ntp.org",
             "_ntp_country": "New Zealand",
@@ -145,11 +165,14 @@ def load_config():
             "_battery_device_address": "",
             "_battery_device_name": "",
             "_battery_short_name": "",
-            "_custom_colors": DEFAULT_CONFIG["_custom_colors"],
         }
         for key, value in migration_defaults.items():
             if key not in data or (key == "_theme" and data[key] == "Netflix Red"):
                 data[key] = value
+        data["_custom_colors"] = {
+            **DEFAULT_CONFIG["_custom_colors"],
+            **(data.get("_custom_colors") if isinstance(data.get("_custom_colors"), dict) else {}),
+        }
 
         for key, value in data.items():
             if not key.startswith("_") and isinstance(value, dict):

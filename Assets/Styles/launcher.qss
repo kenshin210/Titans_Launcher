@@ -240,25 +240,50 @@ QSlider#soundDisplaySlider::handle:horizontal {
     border-radius: 8px;
 }
 
+/* Settings Panel Buttons - Consistent with launcher style */
 QPushButton#soundDisplayButton {
-    background-color: rgba(55, 55, 55, 210);
+    background-color: rgba(35, 35, 35, 160);
     color: #FFFFFF;
-    padding: 8px 14px;
-    border: 1px solid rgba(255, 255, 255, 35);
-    border-radius: 4px;
+    padding: 10px 20px;
+    border: 2px solid rgba(255, 255, 255, 30);
+    border-radius: 12px;
     font-weight: bold;
+    font-size: 14px;
 }
 
 QPushButton#soundDisplayButton:hover,
 QPushButton#soundDisplayButton:focus {
-    background-color: rgba(75, 75, 75, 230);
-    border-color: $theme_color;
+    background-color: rgba(60, 60, 60, 210);
+    border: 2px solid $theme_color;
 }
 
 QPushButton#soundDisplayButton:disabled {
-    color: rgba(255, 255, 255, 100);
-    background-color: rgba(45, 45, 45, 100);
-    border-color: rgba(255, 255, 255, 15);
+    color: rgba(255, 255, 255, 80);
+    background-color: rgba(35, 35, 35, 80);
+    border: 2px solid rgba(255, 255, 255, 15);
+}
+
+/* Alternative: Smaller variant for compact spaces */
+QPushButton#soundDisplayButtonSmall {
+    background-color: rgba(45, 45, 45, 180);
+    color: #FFFFFF;
+    padding: 6px 12px;
+    border: 1px solid rgba(255, 255, 255, 25);
+    border-radius: 6px;
+    font-weight: bold;
+    font-size: 12px;
+}
+
+QPushButton#soundDisplayButtonSmall:hover,
+QPushButton#soundDisplayButtonSmall:focus {
+    background-color: rgba(65, 65, 65, 220);
+    border: 1px solid $theme_color;
+}
+
+QPushButton#soundDisplayButtonSmall:disabled {
+    color: rgba(255, 255, 255, 60);
+    background-color: rgba(35, 35, 35, 60);
+    border: 1px solid rgba(255, 255, 255, 10);
 }
 
 QCheckBox {

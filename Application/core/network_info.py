@@ -1,5 +1,6 @@
 import ipaddress
 import re
+import subprocess
 from pathlib import Path
 
 MAC_PATTERN = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
@@ -148,3 +149,46 @@ def build_modify_command(nmcli, uuid, connection_type, settings):
     else:
         command += ["ipv4.method", "auto", "ipv4.addresses", "", "ipv4.gateway", ""]
     return command
+
+
+def get_wifi_status():
+    """Get current WiFi connection status and signal strength.
+
+    Returns:
+        dict: Contains 'ssid' (network name), 'signal_strength' (0-100%), and 'connected' (bool)
+    """
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL", "device", "wifi", "list", "--rescan", "no"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if result.returncode != 0:
+            return {"ssid": "Not Connected", "signal_strength": 0, "connected": False}
+
+        for line in result.stdout.strip().split("\n"):
+            if not line:
+                continue
+            fields = split_terse(line)
+            if len(fields) >= 3:
+                active = fields[0].strip()
+                ssid = fields[1].strip()
+                signal = fields[2].strip()
+
+                if active.lower() == "yes" and ssid:
+                    try:
+                        signal_strength = int(signal)
+                        return {
+                            "ssid": ssid,
+                            "signal_strength": max(0, min(100, signal_strength)),
+                            "connected": True
+                        }
+                    except ValueError:
+                        pass
+
+        return {"ssid": "Not Connected", "signal_strength": 0, "connected": False}
+    except Exception:
+        return {"ssid": "Not Connected", "signal_strength": 0, "connected": False}
+

@@ -4,11 +4,12 @@ from PyQt6.QtWidgets import QApplication, QTabBar, QWidget
 
 
 class SettingsFocusOverlay(QWidget):
-    """Draw a focus cue above settings controls without changing their styles."""
+    """Draw a focus cue above an interface scope without changing its styles."""
 
-    def __init__(self, settings):
+    def __init__(self, settings, scope=None):
         super().__init__(settings)
         self.settings = settings
+        self.scope = scope or getattr(settings, "pages", settings)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -20,12 +21,19 @@ class SettingsFocusOverlay(QWidget):
 
     def refresh(self, *_args):
         focused = QApplication.focusWidget()
-        pages = self.settings.pages
+        launcher = self.settings
+        if not hasattr(launcher, "get_theme_color"):
+            launcher = getattr(self.settings, "launcher", launcher)
+        config = getattr(launcher, "config", {})
         if (
             focused is None
             or not self.settings.isVisible()
-            or not pages.isAncestorOf(focused)
+            or not self.scope.isAncestorOf(focused)
             or not focused.isVisible()
+            or (
+                config is not None
+                and not config.get("_show_focus_indicators", True)
+            )
         ):
             self.hide()
             return
@@ -57,10 +65,23 @@ class SettingsFocusOverlay(QWidget):
     def paintEvent(self, _event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        launcher = self.settings
+        if not hasattr(launcher, "get_theme_color"):
+            launcher = getattr(self.settings, "launcher", launcher)
+        config = getattr(launcher, "config", {})
+        color = (
+            QColor("#FFFF00")
+            if config.get("_high_contrast", False)
+            else QColor(getattr(launcher, "get_theme_color", lambda: "#DC143C")())
+        )
         for inset, alpha in ((1, 25), (2, 45), (3, 75)):
-            painter.setPen(QPen(QColor(220, 20, 60, alpha), 2))
+            ring = QColor(color)
+            ring.setAlpha(alpha)
+            painter.setPen(QPen(ring, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(self.rect().adjusted(inset, inset, -inset - 1, -inset - 1), 6, 6)
-        painter.setPen(QPen(QColor(255, 55, 75, 235), 2))
+        ring = QColor(color)
+        ring.setAlpha(235)
+        painter.setPen(QPen(ring, 2))
         painter.setBrush(QColor(255, 255, 255, 18))
         painter.drawRoundedRect(self.rect().adjusted(5, 5, -6, -6), 4, 4)

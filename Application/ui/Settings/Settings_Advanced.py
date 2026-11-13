@@ -37,6 +37,11 @@ from Application.ui.Settings.tab_style import tab_widget_stylesheet, update_tab_
 from Application.ui.Settings.controller_focus import SettingsFocusOverlay
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
 from Application.ui.Settings.UninstallApps import UninstallAppsWidget
+from Application.ui.Settings.Phase3Settings import Phase3SettingsWidget, NotificationSettingsWidget
+from Application.ui.Settings.NotificationInboxWidget import NotificationInboxWidget
+from Application.ui.Settings.DisplayProfilesWidget import DisplayProfilesWidget
+from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySettingsWidget
+from Application.ui.Settings.HomeProfilesWidget import HomeProfilesWidget
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -90,16 +95,22 @@ class AdvancedSettingsWidget(QWidget):
             ("Theme & Power", "theme", self.create_theme_page),
             ("Date & Time", "ntp", self.create_ntp_page),
             ("Weather", "weather", lambda: WeatherSettingsWidget(self.launcher)),
+            ("Notifications", "notifications", lambda: NotificationSettingsWidget(self.launcher)),
+            ("Accessibility", "accessibility", lambda: AccessibilitySettingsWidget(self.launcher)),
         ]
         # Ordered from most to least important; pages are built from this same list.
         self.sections = [
             ("⚙  General", "general", self.create_general_container),
             ("🎛  Display & Sound", "sound_display", lambda: SoundDisplaySettingsWidget(self.launcher)),
+            ("🎨  Display Profiles", "display_profiles", lambda: DisplayProfilesWidget(self.launcher)),
             ("🌐  Network", "network", lambda: NetworkSettingsWidget(self.launcher, advanced=True)),
             ("🔵  Bluetooth", "bluetooth", lambda: BluetoothSettingsWidget(self.launcher)),
             ("🎮  Controller", "controller", lambda: ControllerSettingsWidget(self.launcher)),
             ("🚀  Applications", "applications", self.create_applications_container),
+            ("🏠  Home Screen", "home_profiles", lambda: HomeProfilesWidget(self.launcher)),
             ("📊  Task Manager", "task_manager", lambda: TaskManagerWidget(self.launcher)),
+            ("🧰  System & Users", "system_users", lambda: Phase3SettingsWidget(self.launcher)),
+            ("📬  Notification Inbox", "notification_inbox", lambda: NotificationInboxWidget(self.launcher)),
             ("📋  Logging", "logging", self.create_logging_page),
             ("ℹ  About Device", "about_device", lambda: AboutDeviceWidget(self.launcher)),
         ]
@@ -663,7 +674,10 @@ class AdvancedSettingsWidget(QWidget):
 
         theme_combo = QComboBox()
         theme_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
-        theme_combo.addItems(["Crimson Red", "Cyberpunk Blue", "Emerald Green", "Purple Neon"])
+        theme_combo.addItems([
+            "Crimson Red", "Cyberpunk Blue", "Emerald Green", "Purple Neon",
+            "Colorblind Blue", "Colorblind Orange", "Colorblind Purple",
+        ])
         theme_combo.setCurrentText(self.launcher.config.get("_theme", "Crimson Red"))
 
         hex_input = QLineEdit()
@@ -740,6 +754,7 @@ class AdvancedSettingsWidget(QWidget):
             self.launcher.config["_custom_colors"][selected_theme] = custom_hex
 
             self.launcher.save_config_file()
+            self.launcher.apply_accessibility_settings()
             self.launcher.refresh_applications_view()
             update_tab_styles(self, self.launcher.get_theme_color())
             update_save_button_color(color.name())

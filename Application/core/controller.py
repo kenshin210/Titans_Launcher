@@ -1,5 +1,7 @@
 import json
+import os
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -17,12 +19,36 @@ except ImportError:
     PYGAME_AVAILABLE = False
 
 
+@contextmanager
+def _background_joystick_events():
+    name = "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS"
+    previous = os.environ.get(name)
+    os.environ[name] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = previous
+
+
 class PygameControllerThread(QThread):
     raw_input = pyqtSignal(str)
+    keyboard_shortcut = pyqtSignal()
+    browser_pointer = pyqtSignal(float, float, float, float)
+    browser_pointer_error = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._stop_event = threading.Event()
+        self._browser_pointer_enabled = threading.Event()
+
+    def set_browser_pointer_enabled(self, enabled):
+        if enabled:
+            self._browser_pointer_enabled.set()
+        else:
+            self._browser_pointer_enabled.clear()
 
     def stop(self):
         self._stop_event.set()
@@ -34,24 +60,41 @@ class PygameControllerThread(QThread):
             return
 
         try:
-            pygame.init()
-            pygame.joystick.init()
+            with _background_joystick_events():
+                pygame.init()
+                pygame.joystick.init()
         except Exception as error:
             log_error(f"Failed to initialize pygame joystick subsystem: {error}")
             return
 
         joysticks = {}
         active_axes = {}
+        pointer_poller = None
+        pointer_error_reported = False
+        shortcuts = ControllerShortcut()
 
         while not self._stop_event.is_set() and not self.isInterruptionRequested():
             try:
                 if not pygame.joystick.get_init():
-                    pygame.joystick.init()
+                    with _background_joystick_events():
+                        pygame.joystick.init()
                     joysticks.clear()
                     active_axes.clear()
                     log_info("Reinitialized pygame joystick subsystem.")
 
                 pygame.event.pump()
+
+                if pointer_poller is None and not pointer_error_reported:
+                    try:
+                        from pygame._sdl2 import controller as sdl_controller
+                        sdl_controller.init()
+                        pointer_poller = BrowserPointerPoller(pygame, sdl_controller)
+                    except (ImportError, pygame.error) as error:
+                        log_error(f"Controller shortcut and browser mouse unavailable: {error}")
+                        self.browser_pointer_error.emit(str(error))
+                        pointer_error_reported = True
+                if pointer_poller is not None:
+                    pointer_poller.sync()
 
                 for joystick_index in range(pygame.joystick.get_count()):
                     if joystick_index not in joysticks:
@@ -65,7 +108,21 @@ class PygameControllerThread(QThread):
 
                 for event in pygame.event.get():
                     if event.type == pygame.JOYBUTTONDOWN:
-                        self.raw_input.emit(f"button:{event.button}")
+                        mapping = pointer_poller.button_mapping(event.instance_id) if pointer_poller else None
+                        inputs, activate = shortcuts.button(event.instance_id, event.button, True, mapping)
+                        for input_name in inputs:
+                            self.raw_input.emit(input_name)
+                        if activate:
+                            self.keyboard_shortcut.emit()
+                    elif event.type == pygame.JOYBUTTONUP:
+                        mapping = pointer_poller.button_mapping(event.instance_id) if pointer_poller else None
+                        inputs, activate = shortcuts.button(event.instance_id, event.button, False, mapping)
+                        for input_name in inputs:
+                            self.raw_input.emit(input_name)
+                        if activate:
+                            self.keyboard_shortcut.emit()
+                    elif event.type == pygame.JOYDEVICEREMOVED:
+                        shortcuts.remove(event.instance_id)
                     elif event.type == pygame.JOYHATMOTION:
                         hat_x, hat_y = event.value
                         if hat_x == 1:
@@ -91,21 +148,113 @@ class PygameControllerThread(QThread):
                         elif axis_input is None:
                             active_axes.pop(axis_key, None)
 
+                if self._browser_pointer_enabled.is_set():
+                    if pointer_poller is not None:
+                        self.browser_pointer.emit(*pointer_poller.sample())
+
                 self._stop_event.wait(0.03)
             except Exception as error:
                 if self._stop_event.is_set() or self.isInterruptionRequested():
                     break
+                if self._browser_pointer_enabled.is_set():
+                    self.browser_pointer.emit(0.0, 0.0, 0.0, 0.0)
                 log_warning(f"Pygame controller polling error: {error}")
                 if not pygame.joystick.get_init():
                     try:
-                        pygame.joystick.init()
+                        with _background_joystick_events():
+                            pygame.joystick.init()
                         joysticks.clear()
                         log_info("Recovered pygame joystick subsystem after polling error.")
                     except Exception as init_error:
                         log_error(f"Failed to recover pygame joystick subsystem: {init_error}")
                 self._stop_event.wait(2)
 
+        if pointer_poller is not None:
+            pointer_poller.close()
         pygame.quit()
+
+
+class ControllerShortcut:
+    """Reserve guide while held; replay it unless a keyboard shortcut was used."""
+
+    def __init__(self):
+        self.held_guide = {}
+
+    def button(self, instance_id, button, pressed, mapping):
+        guide, x, b = mapping if mapping else (None, None, None)
+        if button == guide:
+            if pressed:
+                self.held_guide[instance_id] = False
+                return [], False
+            used = self.held_guide.pop(instance_id, None)
+            return ([f"button:{button}"] if used is False else []), False
+        if pressed and button in (x, b) and instance_id in self.held_guide:
+            if not self.held_guide[instance_id]:
+                self.held_guide[instance_id] = True
+                return [], True
+            return [], False
+        return ([f"button:{button}"] if pressed else []), False
+
+    def remove(self, instance_id):
+        self.held_guide.pop(instance_id, None)
+
+
+class BrowserPointerPoller:
+    """Read SDL-mapped axes, which are independent of raw joystick axis numbers."""
+
+    def __init__(self, pygame_module, controller_module):
+        self.pygame = pygame_module
+        self.controller_module = controller_module
+        self.controllers = {}
+        self.unsupported = set()
+
+    def sync(self):
+        connected = set()
+        for index in range(self.pygame.joystick.get_count()):
+            joystick = self.pygame.joystick.Joystick(index)
+            if not joystick.get_init():
+                joystick.init()
+            instance_id = joystick.get_instance_id()
+            connected.add(instance_id)
+            if instance_id not in self.controllers and instance_id not in self.unsupported:
+                if self.controller_module.is_controller(index):
+                    self.controllers[instance_id] = self.controller_module.Controller(index)
+                else:
+                    self.unsupported.add(instance_id)
+                    log_warning(f"Controller '{joystick.get_name()}' has no SDL gamepad mapping; browser mouse unavailable.")
+
+        for instance_id in set(self.controllers) - connected:
+            self.controllers.pop(instance_id).quit()
+        self.unsupported.intersection_update(connected)
+
+    def button_mapping(self, instance_id):
+        controller = self.controllers.get(instance_id)
+        if controller is None or not controller.attached():
+            return None
+        mapping = controller.get_mapping()
+        names = (mapping.get("guide", ""), mapping.get("x", ""), mapping.get("b", ""))
+        if not names[0].startswith("b") or not names[0][1:].isdigit():
+            return None
+        buttons = tuple(int(name[1:]) if name.startswith("b") and name[1:].isdigit() else None
+                        for name in names)
+        return buttons if any(button is not None for button in buttons[1:]) else None
+
+    def sample(self):
+        self.sync()
+        x = y = left = right = 0.0
+        for controller in self.controllers.values():
+            if not controller.attached():
+                continue
+            x += controller.get_axis(self.pygame.CONTROLLER_AXIS_RIGHTX) / 32767.0
+            y += controller.get_axis(self.pygame.CONTROLLER_AXIS_RIGHTY) / 32767.0
+            left = max(left, controller.get_axis(self.pygame.CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0)
+            right = max(right, controller.get_axis(self.pygame.CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0)
+        return tuple(max(-1.0, min(1.0, value)) for value in (x, y, left, right))
+
+    def close(self):
+        for controller in self.controllers.values():
+            controller.quit()
+        self.controllers.clear()
 
 
 def load_controller_bindings(profile_name):

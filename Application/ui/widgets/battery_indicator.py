@@ -2,8 +2,9 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from Application.core.battery import read_battery
+from Application.core.battery import read_battery, read_xbox_battery
 from Application.ui.Settings.AsyncTask import TaskRunnerMixin
+from Application.ui.Settings.Logger import log_warning
 
 REFRESH_INTERVAL_MS = 60_000
 
@@ -65,6 +66,7 @@ class BatteryIndicator(QWidget, TaskRunnerMixin):
         super().__init__(parent)
         self.config = config
         self._busy = False
+        self._address = None
         self.setFixedHeight(65)
 
         layout = QVBoxLayout(self)
@@ -96,33 +98,47 @@ class BatteryIndicator(QWidget, TaskRunnerMixin):
 
     def reload(self):
         address = self.config.get("_battery_device_address", "")
-        if not address:
-            self.timer.stop()
-            self.hide()
-            return
-        short_name = self.config.get("_battery_short_name") or self.config.get("_battery_device_name", "")
+        if address != self._address:
+            self._address = address
+            self._show_state(None, False, False)
+        short_name = (
+            self.config.get("_battery_short_name") or self.config.get("_battery_device_name") or "Controller"
+            if address else "Xbox"
+        )
         self.name_label.setText(short_name)
-        self.setToolTip(self.config.get("_battery_device_name", ""))
+        self.setToolTip(self.config.get("_battery_device_name", "") if address else "Xbox controller (automatic)")
         self.show()
         self.timer.start(REFRESH_INTERVAL_MS)
         self.refresh()
 
     def refresh(self):
         address = self.config.get("_battery_device_address", "")
-        if not address or self._busy:
+        if self._busy:
             return
         self._busy = True
 
         def done(result):
             self._busy = False
+            if address != self.config.get("_battery_device_address", ""):
+                self.refresh()
+                return
             if isinstance(result, Exception):
+                log_warning(f"Could not read controller battery: {result}")
                 self._show_state(None, False, False)
                 return
-            available = result["connected"] is not False and result["percent"] is not None
-            self._show_state(result["percent"], result["charging"], available)
+            if result is None:
+                self._show_state(None, False, False)
+                return
+            percent = result["percent"]
+            available = (
+                result.get("connected") is not False
+                and percent is not None and 0 <= percent <= 100
+            )
+            self._show_state(percent, result["charging"] if available else False, available)
 
-        self.run_async(lambda: read_battery(address), done)
+        self.run_async(lambda: read_battery(address) if address else read_xbox_battery(), done)
 
     def _show_state(self, percent, charging, available):
         self.icon.set_state(percent, charging, available)
         self.percent_label.setText(f"{percent}%" if available else "--")
+        self.percent_label.setToolTip("" if available else "Controller battery level unavailable")
