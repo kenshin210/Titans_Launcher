@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 from Application.core.packages import (
     featured_packages, install_command, installed_names, removable_packages, search_packages,
 )
+from Application.core.corner_style import corner_radius
 from Application.styles import load_stylesheet
 from Application.ui.dialogs.themed_message_box import ThemedMessageBox
 from Application.ui.Settings.AsyncTask import TaskRunnerMixin, command_error, run_command
@@ -37,7 +38,7 @@ def package_icon(name):
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setBrush(colour)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(0, 0, ICON_SIZE, ICON_SIZE, 16, 16)
+    painter.drawRoundedRect(0, 0, ICON_SIZE, ICON_SIZE, corner_radius(16), corner_radius(16))
     painter.setPen(QColor("white"))
     font = QFont()
     font.setBold(True)

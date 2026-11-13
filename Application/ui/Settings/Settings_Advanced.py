@@ -39,9 +39,10 @@ from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWid
 from Application.ui.Settings.UninstallApps import UninstallAppsWidget
 from Application.ui.Settings.Phase3Settings import Phase3SettingsWidget, NotificationSettingsWidget
 from Application.ui.Settings.NotificationInboxWidget import NotificationInboxWidget
-from Application.ui.Settings.DisplayProfilesWidget import DisplayProfilesWidget
 from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySettingsWidget
 from Application.ui.Settings.HomeProfilesWidget import HomeProfilesWidget
+from Application.ui.Settings.ButtonStyleWidget import ButtonStyleWidget
+from Application.core import corner_style
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -92,7 +93,9 @@ class AdvancedSettingsWidget(QWidget):
         self.general_subsections = [
             ("General", "general", self.create_general_page),
             ("Background", "background", self.create_background_page),
-            ("Theme & Power", "theme", self.create_theme_page),
+            ("Theme", "theme", self.create_theme_page),
+            ("Buttons", "buttons", lambda: ButtonStyleWidget(self.launcher)),
+            ("Power", "power", self.create_power_page),
             ("Date & Time", "ntp", self.create_ntp_page),
             ("Weather", "weather", lambda: WeatherSettingsWidget(self.launcher)),
             ("Notifications", "notifications", lambda: NotificationSettingsWidget(self.launcher)),
@@ -102,14 +105,13 @@ class AdvancedSettingsWidget(QWidget):
         self.sections = [
             ("⚙  General", "general", self.create_general_container),
             ("🎛  Display & Sound", "sound_display", lambda: SoundDisplaySettingsWidget(self.launcher)),
-            ("🎨  Display Profiles", "display_profiles", lambda: DisplayProfilesWidget(self.launcher)),
             ("🌐  Network", "network", lambda: NetworkSettingsWidget(self.launcher, advanced=True)),
             ("🔵  Bluetooth", "bluetooth", lambda: BluetoothSettingsWidget(self.launcher)),
             ("🎮  Controller", "controller", lambda: ControllerSettingsWidget(self.launcher)),
             ("🚀  Applications", "applications", self.create_applications_container),
             ("🏠  Home Screen", "home_profiles", lambda: HomeProfilesWidget(self.launcher)),
             ("📊  Task Manager", "task_manager", lambda: TaskManagerWidget(self.launcher)),
-            ("🧰  System & Users", "system_users", lambda: Phase3SettingsWidget(self.launcher)),
+            ("👤  Users", "users", lambda: Phase3SettingsWidget(self.launcher)),
             ("📬  Notification Inbox", "notification_inbox", lambda: NotificationInboxWidget(self.launcher)),
             ("📋  Logging", "logging", self.create_logging_page),
             ("ℹ  About Device", "about_device", lambda: AboutDeviceWidget(self.launcher)),
@@ -640,40 +642,21 @@ class AdvancedSettingsWidget(QWidget):
         layout.addStretch()
         return card
 
-    # --- TAB 5: Themes & Animation/Glitch/Power Customization ---
+    # --- TAB 5: Theme colour, corners and animation ---
     def create_theme_page(self):
         theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
+        field_style = "background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;"
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("background: transparent; border: none;")
-
-        card = QWidget()
-        card.setObjectName("settingsCard")
-        card.setStyleSheet("""
-            QWidget#settingsCard {
-                background-color: rgba(22, 22, 22, 200);
-                border: 1px solid rgba(255, 255, 255, 30);
-                border-radius: 14px;
-            }
-        """)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(35, 35, 35, 35)
-        layout.setSpacing(18)
-
-        title = QLabel("Theme, Style & System Commands")
-        title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
-        layout.addWidget(title)
-
-        desc = QLabel("Customize theme hex values, tile button shape, animations, and system power commands.")
-        desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
-        layout.addWidget(desc)
+        scroll, card, layout = self._settings_card(
+            "Theme & Style",
+            "Customize the accent color, corner style, and animations. Button looks live in the Buttons tab.",
+        )
 
         theme_form = QFormLayout()
         theme_form.setVerticalSpacing(12)
 
         theme_combo = QComboBox()
-        theme_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
+        theme_combo.setStyleSheet(field_style)
         theme_combo.addItems([
             "Crimson Red", "Cyberpunk Blue", "Emerald Green", "Purple Neon",
             "Colorblind Blue", "Colorblind Orange", "Colorblind Purple",
@@ -681,21 +664,12 @@ class AdvancedSettingsWidget(QWidget):
         theme_combo.setCurrentText(self.launcher.config.get("_theme", "Crimson Red"))
 
         hex_input = QLineEdit()
-        hex_input.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
+        hex_input.setStyleSheet(field_style)
 
-        shape_combo = QComboBox()
-        shape_combo.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
-        shape_combo.addItems(["Rounded Square", "Circle"])
-        shape_combo.setCurrentText(self.launcher.config.get("_button_shape", "Rounded Square"))
-
-        power_cmd_input = QLineEdit(self.launcher.config.get("_power_command", "systemctl poweroff"))
-        power_cmd_input.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
-
-        sleep_cmd_input = QLineEdit(self.launcher.config.get("_sleep_command", "systemctl suspend"))
-        sleep_cmd_input.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
-
-        restart_cmd_input = QLineEdit(self.launcher.config.get("_restart_command", "systemctl reboot"))
-        restart_cmd_input.setStyleSheet("background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;")
+        corner_combo = QComboBox()
+        corner_combo.setStyleSheet(field_style)
+        corner_combo.addItems(list(corner_style.CORNER_STYLES))
+        corner_combo.setCurrentText(self.launcher.config.get("_corner_style", corner_style.ROUNDED))
 
         anim_checkbox = QCheckBox("Enable Hover & Click Animations")
         anim_checkbox.setStyleSheet("color: white; font-size: 15px; border: none;")
@@ -714,14 +688,11 @@ class AdvancedSettingsWidget(QWidget):
 
         theme_form.addRow(QLabel("Theme Style:"), theme_combo)
         theme_form.addRow(QLabel("Theme Hex Color:"), hex_input)
-        theme_form.addRow(QLabel("Button Shape:"), shape_combo)
-        theme_form.addRow(QLabel("Shutdown Command:"), power_cmd_input)
-        theme_form.addRow(QLabel("Sleep Command:"), sleep_cmd_input)
-        theme_form.addRow(QLabel("Restart Command:"), restart_cmd_input)
+        theme_form.addRow(QLabel("Corner Style:"), corner_combo)
         theme_form.addRow(anim_checkbox)
         theme_form.addRow(glitch_checkbox)
 
-        save_theme_btn = QPushButton("Save Settings")
+        save_theme_btn = QPushButton("Save Theme")
 
         def update_save_button_color(color):
             save_theme_btn.setStyleSheet(f"background-color: {color}; color: white; padding: 12px 24px; font-weight: bold; border-radius: 8px; font-size: 15px;")
@@ -735,18 +706,11 @@ class AdvancedSettingsWidget(QWidget):
             if not color.isValid() or color.alpha() != 255:
                 QMessageBox.warning(self, "Invalid Theme Color", "Enter a valid opaque theme color, such as #DC143C.")
                 return
-            selected_shape = shape_combo.currentText()
-            power_cmd = power_cmd_input.text().strip()
-            sleep_cmd = sleep_cmd_input.text().strip()
-            restart_cmd = restart_cmd_input.text().strip()
             enable_anim = anim_checkbox.isChecked()
             enable_glitch = glitch_checkbox.isChecked()
 
             self.launcher.config["_theme"] = selected_theme
-            self.launcher.config["_button_shape"] = selected_shape
-            self.launcher.config["_power_command"] = power_cmd
-            self.launcher.config["_sleep_command"] = sleep_cmd
-            self.launcher.config["_restart_command"] = restart_cmd
+            self.launcher.config["_corner_style"] = corner_combo.currentText()
             self.launcher.config["_enable_animations"] = enable_anim
             self.launcher.config["_enable_glitch"] = enable_glitch
             if "_custom_colors" not in self.launcher.config:
@@ -755,11 +719,12 @@ class AdvancedSettingsWidget(QWidget):
 
             self.launcher.save_config_file()
             self.launcher.apply_accessibility_settings()
+            corner_style.set_corner_style(corner_combo.currentText())
             self.launcher.refresh_applications_view()
             update_tab_styles(self, self.launcher.get_theme_color())
             update_save_button_color(color.name())
-            log_info(f"Advanced Settings: Saved theme '{selected_theme}', hex '{custom_hex}', shape '{selected_shape}', anim={enable_anim}, glitch={enable_glitch}")
-            QMessageBox.information(self, "Success", "Theme and power settings saved successfully!")
+            log_info(f"Advanced Settings: Saved theme '{selected_theme}', hex '{custom_hex}', corners '{corner_combo.currentText()}', anim={enable_anim}, glitch={enable_glitch}")
+            QMessageBox.information(self, "Success", "Theme settings saved successfully!")
 
         save_theme_btn.clicked.connect(save_launcher_theme)
         layout.addLayout(theme_form)
@@ -768,6 +733,73 @@ class AdvancedSettingsWidget(QWidget):
 
         scroll.setWidget(card)
         return scroll
+
+    # --- TAB 5b: Power commands ---
+    def create_power_page(self):
+        theme_color = self.launcher.get_theme_color() if hasattr(self.launcher, 'get_theme_color') else "#DC143C"
+        field_style = "background-color: rgba(40, 40, 40, 200); color: white; padding: 10px; font-size: 14px; border: 1px solid rgba(255, 255, 255, 25); border-radius: 6px;"
+
+        scroll, card, layout = self._settings_card(
+            "Power",
+            "Set the commands used by the launcher's shutdown, sleep, and restart actions.",
+        )
+
+        power_cmd_input = QLineEdit(self.launcher.config.get("_power_command", "systemctl poweroff"))
+        sleep_cmd_input = QLineEdit(self.launcher.config.get("_sleep_command", "systemctl suspend"))
+        restart_cmd_input = QLineEdit(self.launcher.config.get("_restart_command", "systemctl reboot"))
+        for field in (power_cmd_input, sleep_cmd_input, restart_cmd_input):
+            field.setStyleSheet(field_style)
+
+        form = QFormLayout()
+        form.setVerticalSpacing(12)
+        form.addRow(QLabel("Shutdown Command:"), power_cmd_input)
+        form.addRow(QLabel("Sleep Command:"), sleep_cmd_input)
+        form.addRow(QLabel("Restart Command:"), restart_cmd_input)
+
+        save_btn = QPushButton("Save Power Settings")
+        save_btn.setStyleSheet(f"background-color: {theme_color}; color: white; padding: 12px 24px; font-weight: bold; border-radius: 8px; font-size: 15px;")
+
+        def save_power():
+            self.launcher.config["_power_command"] = power_cmd_input.text().strip()
+            self.launcher.config["_sleep_command"] = sleep_cmd_input.text().strip()
+            self.launcher.config["_restart_command"] = restart_cmd_input.text().strip()
+            self.launcher.save_config_file()
+            log_info("Advanced Settings: Saved power commands")
+            QMessageBox.information(self, "Success", "Power settings saved successfully!")
+
+        save_btn.clicked.connect(save_power)
+        layout.addLayout(form)
+        layout.addWidget(save_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addStretch()
+
+        scroll.setWidget(card)
+        return scroll
+
+    @staticmethod
+    def _settings_card(title_text, description_text):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        card = QWidget()
+        card.setObjectName("settingsCard")
+        card.setStyleSheet("""
+            QWidget#settingsCard {
+                background-color: rgba(22, 22, 22, 200);
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 14px;
+            }
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(35, 35, 35, 35)
+        layout.setSpacing(18)
+        title = QLabel(title_text)
+        title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
+        layout.addWidget(title)
+        desc = QLabel(description_text)
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
+        layout.addWidget(desc)
+        return scroll, card, layout
 
     # --- TAB 6: Date & Time ---
     def create_ntp_page(self):

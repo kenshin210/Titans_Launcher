@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from Application.styles import load_stylesheet
+from Application.ui.Settings.DisplayProfilesWidget import DisplayProfilesWidget
 from Application.ui.Settings.tab_style import tab_widget_stylesheet
 
 
@@ -61,6 +62,7 @@ class SoundDisplaySettingsWidget(QWidget):
             ),
             "Sound",
         )
+        tabs.addTab(DisplayProfilesWidget(launcher), "Display Profiles")
         root_layout.addWidget(tabs)
 
         self.refresh_all()

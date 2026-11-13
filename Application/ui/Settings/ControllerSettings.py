@@ -28,6 +28,19 @@ class ControllerSettingsWidget(QWidget):
     def __init__(self, launcher):
         super().__init__()
         self.launcher = launcher
+        self.setObjectName("controllerSettingsCard")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet("""
+            QWidget#controllerSettingsCard {
+                background-color: rgba(22, 22, 22, 200);
+                border-radius: 14px;
+                border: 1px solid rgba(255, 255, 255, 15);
+            }
+            QLabel {
+                color: white;
+                background: transparent;
+            }
+        """)
         self.profile_data = {}
         self.binding_labels = {}
         self.bind_buttons = {}

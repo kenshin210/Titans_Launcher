@@ -100,7 +100,8 @@ class ControllerFileDialog(QDialog):
         self.setWindowTitle(caption)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setFixedSize(920, 640)
+        self.setMinimumSize(920, 640)
+        self.resize(920, 640)
         self.setStyleSheet(f"""
             QWidget#pickerCard {{
                 background-color: rgba(20, 20, 20, 245);

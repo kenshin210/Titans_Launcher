@@ -75,6 +75,8 @@ from .ui.widgets.app_switcher import AppSwitcherWidget
 from .core.privilege_manager import get_privilege_manager
 from .core.sudo_cache import get_credential_cache
 from .core.home_profiles import application_names, normalize_home_profiles, ordered_home_applications
+from .core import button_style, corner_style
+from .core.accessibility import text_scale_percent
 from .ui.Settings.controller_focus import SettingsFocusOverlay
 from .ui.widgets.control_centre_overlay import ControlCentreOverlay
 
@@ -108,6 +110,8 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.app_finished_signal.connect(self.on_app_finished)
 
         self.nav_sound = NavigationSoundPlayer(self.config)
+        self.apply_button_style()
+        corner_style.set_corner_style(self.config.get("_corner_style", corner_style.ROUNDED))
         self.initUI()
         self._control_centre_shortcut = QShortcut(
             QKeySequence(self.config.get("_control_centre_shortcut", "Ctrl+Shift+Space")),
@@ -543,12 +547,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         bottom_layout.addStretch()
         self.control_centre_btn = QPushButton("☰ Control Centre")
         self.control_centre_btn.setObjectName("launcherSettingsButton")
-        self.control_centre_btn.setStyleSheet(
-            load_stylesheet(
-                theme_color=self.get_theme_color(),
-                border_radius=self.get_border_radius(),
-            )
-        )
+        self.update_settings_button_style()
         self.control_centre_btn.clicked.connect(self.show_control_centre)
         bottom_layout.addWidget(
             self.control_centre_btn,
@@ -861,14 +860,23 @@ class MainApp(QWidget, TaskRunnerMixin):
         animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def apply_accessibility_settings(self):
+        self.apply_button_style()
         app = QApplication.instance()
         if app is None:
             return
 
         font = QFont(self._base_application_font)
-        if self.config.get("_large_text", False):
-            font.setPointSize(max(1, font.pointSize() + 3))
+        scale = text_scale_percent(self.config)
+        app.setProperty("_text_scale", scale)
+        if scale != 100:
+            if font.pointSizeF() > 0:
+                font.setPointSizeF(max(1.0, font.pointSizeF() * scale / 100))
+            elif font.pixelSize() > 0:
+                font.setPixelSize(max(1, round(font.pixelSize() * scale / 100)))
         app.setFont(font)
+        for widget in app.allWidgets():
+            if isinstance(widget, ThemedMessageBox):
+                widget.apply_text_scale(scale)
 
         if self.config.get("_high_contrast", False):
             palette = QPalette()
@@ -886,21 +894,21 @@ class MainApp(QWidget, TaskRunnerMixin):
         else:
             app.setPalette(self._base_application_palette)
 
-        if hasattr(self, "control_centre_btn"):
-            self.control_centre_btn.setStyleSheet(
-                load_stylesheet(
-                    theme_color=self.get_theme_color(),
-                    border_radius=self.get_border_radius(),
-                )
-            )
+        self.update_settings_button_style()
         if hasattr(self, "home_focus_overlay"):
             self.home_focus_overlay.refresh()
 
     def get_border_radius(self):
-        shape = self.config.get("_button_shape", "Rounded Square")
-        if shape == "Circle":
-            return "50%"
-        return "28px"
+        if self.config.get("_corner_style", corner_style.ROUNDED) == corner_style.SHARP:
+            return "0px"
+        return button_style.tile_radius(self.config.get("_button_shape", "Rounded Square"))
+
+    def apply_button_style(self):
+        button_style.set_button_style(
+            self.config.get("_button_shape", "Rounded Square"),
+            self.config.get("_button_style"),
+            self.get_theme_color(),
+        )
 
     def update_back_button_style(self):
         theme_color = self.get_theme_color()
@@ -911,15 +919,28 @@ class MainApp(QWidget, TaskRunnerMixin):
     def update_settings_button_style(self):
         theme_color = self.get_theme_color()
         border_radius = self.get_border_radius()
+        bar_border_radius = (
+            "0px"
+            if self.config.get("_corner_style", corner_style.ROUNDED) == corner_style.SHARP
+            else button_style.bar_radius(self.config.get("_button_shape", "Rounded Square"))
+        )
         self.update_back_button_style()
 
         if hasattr(self, 'config_btn'):
             self.config_btn.setStyleSheet(
-                load_stylesheet(theme_color=theme_color, border_radius=border_radius)
+                load_stylesheet(
+                    theme_color=theme_color,
+                    border_radius=border_radius,
+                    bar_border_radius=bar_border_radius,
+                )
             )
         if hasattr(self, "control_centre_btn"):
             self.control_centre_btn.setStyleSheet(
-                load_stylesheet(theme_color=theme_color, border_radius=border_radius)
+                load_stylesheet(
+                    theme_color=theme_color,
+                    border_radius=border_radius,
+                    bar_border_radius=bar_border_radius,
+                )
             )
 
         if hasattr(self, 'power_btn'):

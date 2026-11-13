@@ -43,7 +43,8 @@ class OnScreenKeyboard(QDialog):
         self.setWindowTitle(title)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setFixedSize(860, 560)
+        self.setMinimumSize(860, 560)
+        self.resize(860, 560)
         self.setStyleSheet(f"""
             QWidget#keyboardCard {{
                 background-color: rgba(20, 20, 20, 245);

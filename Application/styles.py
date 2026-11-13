@@ -6,6 +6,7 @@ STYLES_DIR = Path(__file__).resolve().parent.parent / "Assets" / "Styles"
 DEFAULT_STYLE_VALUES = {
     "theme_color": "#DC143C",
     "border_radius": "28px",
+    "bar_border_radius": "12px",
     "background_color": "#141414",
 }
 

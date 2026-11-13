@@ -20,6 +20,8 @@ from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
 from Application.ui.Settings.BluetoothSettings import BluetoothSettingsWidget
 from Application.ui.Settings.WeatherSettings import WeatherSettingsWidget
 from Application.ui.Settings.tab_style import tab_widget_stylesheet, update_tab_styles
+from Application.core import corner_style
+from Application.ui.Settings.ButtonStyleWidget import ButtonStyleWidget
 from Application.ui.Settings.controller_focus import SettingsFocusOverlay
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
 from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySettingsWidget
@@ -75,6 +77,7 @@ class BasicSettingsWidget(QWidget):
             ("General", "general", self.create_general_page),
             ("Background", "background", self.create_background_page),
             ("Theme", "theme", self.create_theme_page),
+            ("Buttons", "buttons", lambda: ButtonStyleWidget(self.launcher)),
             ("Weather", "weather", lambda: WeatherSettingsWidget(self.launcher)),
             ("Accessibility", "accessibility", lambda: AccessibilitySettingsWidget(self.launcher)),
         ]
@@ -444,7 +447,7 @@ class BasicSettingsWidget(QWidget):
         title.setStyleSheet("color: #FFFFFF; font-size: 24px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
-        desc = QLabel("Select an accent color theme for button highlights, borders, and active tabs.")
+        desc = QLabel("Select an accent color and rounded or sharp corners for buttons, borders, and tabs.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
 
@@ -461,12 +464,20 @@ class BasicSettingsWidget(QWidget):
 
         form.addRow(QLabel("Theme Color:"), theme_combo)
 
+        corner_combo = QComboBox()
+        corner_combo.setStyleSheet(theme_combo.styleSheet())
+        corner_combo.addItems(list(corner_style.CORNER_STYLES))
+        corner_combo.setCurrentText(self.launcher.config.get("_corner_style", corner_style.ROUNDED))
+        form.addRow(QLabel("Corner Style:"), corner_combo)
+
         save_btn = QPushButton("Save Theme")
         save_btn.setStyleSheet(f"background-color: {theme_color}; color: white; padding: 12px 24px; font-weight: bold; border-radius: 8px; font-size: 15px;")
 
         def save_theme():
             selected_theme = theme_combo.currentText()
             self.launcher.config["_theme"] = selected_theme
+            self.launcher.config["_corner_style"] = corner_combo.currentText()
+            corner_style.set_corner_style(corner_combo.currentText())
             self.launcher.save_config_file()
             self.launcher.apply_accessibility_settings()
             self.launcher.refresh_applications_view()
