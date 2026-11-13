@@ -125,7 +125,7 @@ QPushButton#launcherSettingsButton {
     font-size: 16px;
     font-weight: bold;
     padding: 14px 28px;
-    border-radius: $border_radius;
+    border-radius: $bar_border_radius;
     border: 2px solid rgba(255, 255, 255, 25);
 }
 
