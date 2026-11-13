@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -215,11 +216,33 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         channel_row.addWidget(QLabel("Update channel:"))
         self.update_channel_combo = QComboBox()
         self.update_channel_combo.addItems(UPDATE_CHANNELS)
-        self.update_channel_combo.setCurrentText(self.launcher_update_service.branch)
+        self.update_channel_combo.setCurrentText(self.launcher_update_service.channel)
         self.update_channel_combo.currentTextChanged.connect(self._set_update_channel)
         channel_row.addWidget(self.update_channel_combo)
         channel_row.addStretch()
         layout.addLayout(channel_row)
+        self.custom_source_row = QWidget()
+        custom_layout = QHBoxLayout(self.custom_source_row)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.addWidget(QLabel("GitHub repository:"))
+        self.custom_repository = QLineEdit()
+        self.custom_repository.setPlaceholderText("owner/repository")
+        repository = self.launcher_update_service.custom_repository
+        self.custom_repository.setText(repository if isinstance(repository, str) else "")
+        custom_layout.addWidget(self.custom_repository)
+        custom_layout.addWidget(QLabel("Branch:"))
+        self.custom_branch = QLineEdit()
+        self.custom_branch.setPlaceholderText("main")
+        branch = self.launcher_update_service.custom_branch
+        self.custom_branch.setText(branch if isinstance(branch, str) else "")
+        custom_layout.addWidget(self.custom_branch)
+        self.apply_custom_button = QPushButton("Apply Custom Source")
+        self.apply_custom_button.setObjectName("soundDisplayButton")
+        self.apply_custom_button.clicked.connect(self._apply_custom_source)
+        custom_layout.addWidget(self.apply_custom_button)
+        layout.addWidget(self.custom_source_row)
+        self.custom_repository.textChanged.connect(self._sync_launcher_update)
+        self.custom_branch.textChanged.connect(self._sync_launcher_update)
         self.launcher_update_status = QLabel()
         self.launcher_update_status.setWordWrap(True)
         layout.addWidget(self.launcher_update_status)
@@ -280,17 +303,40 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         self._sync_launcher_update()
 
     def _set_update_channel(self, branch):
+        if branch == "Custom":
+            self._sync_launcher_update()
+            return
         try:
             self.launcher_update_service.set_branch(branch)
         except (RuntimeError, ValueError) as error:
             QMessageBox.warning(self, "Launcher Update Channel", str(error))
-            self._sync_launcher_update()
+            self.update_channel_combo.blockSignals(True)
+            self.update_channel_combo.setCurrentText(self.launcher_update_service.channel)
+            self.update_channel_combo.blockSignals(False)
+        self._sync_launcher_update()
+
+    def _apply_custom_source(self):
+        try:
+            self.launcher_update_service.set_custom_source(
+                self.custom_repository.text(), self.custom_branch.text(),
+            )
+        except (RuntimeError, ValueError) as error:
+            QMessageBox.warning(self, "Custom Launcher Source", str(error))
+        self._sync_launcher_update()
+
+    def _custom_source_pending(self):
+        return self.update_channel_combo.currentText() == "Custom" and (
+            self.launcher_update_service.channel != "Custom"
+            or self.custom_repository.text().strip() != self.launcher_update_service.custom_repository
+            or self.custom_branch.text().strip() != self.launcher_update_service.custom_branch
+        )
 
     def start_launcher_update(self):
         file_check = getattr(self.owner, "_file_check", None)
         if (
             self.launcher_update_service.busy
             or not self.launcher_update_service.available
+            or self._custom_source_pending()
             or self.update_task.process is not None
             or (file_check and file_check.busy)
         ):
@@ -298,9 +344,11 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         answer = QMessageBox.question(
             self,
             "Install launcher update",
-            f"Download and install the launcher files from GitHub "
-            f"{self.launcher_update_service.branch}? "
-            "Your launcher will need to restart to apply the update.",
+            f"Download and install launcher files from GitHub "
+            f"{self.launcher_update_service.repository}, branch "
+            f"{self.launcher_update_service.branch}?\n\n"
+            "Only install sources you trust; this will run their code. "
+            "You will be asked to restart only if the update requires it.",
         )
         if answer == QMessageBox.StandardButton.Yes:
             self.launcher_update_service.install()
@@ -390,16 +438,25 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         self._sync_launcher_update()
 
     def _sync_launcher_update(self):
-        self.launcher_update_status.setText(self.launcher_update_service.status)
-        self.update_channel_combo.blockSignals(True)
-        self.update_channel_combo.setCurrentText(self.launcher_update_service.branch)
-        self.update_channel_combo.blockSignals(False)
+        if not self._custom_source_pending():
+            self.update_channel_combo.blockSignals(True)
+            self.update_channel_combo.setCurrentText(self.launcher_update_service.channel)
+            self.update_channel_combo.blockSignals(False)
+        custom = self.update_channel_combo.currentText() == "Custom"
+        pending = self._custom_source_pending()
+        self.custom_source_row.setVisible(custom)
+        self.custom_source_row.setEnabled(not self.launcher_update_service.busy)
+        self.launcher_update_status.setText(
+            "Apply the custom source before checking or installing updates."
+            if pending else self.launcher_update_service.status
+        )
         self.update_channel_combo.setEnabled(not self.launcher_update_service.busy)
-        self.check_launcher_button.setEnabled(not self.launcher_update_service.busy)
+        self.check_launcher_button.setEnabled(not self.launcher_update_service.busy and not pending)
         self.install_launcher_button.setEnabled(
             not self.launcher_update_service.busy
             and self.launcher_update_service.available
             and self.update_task.process is None
+            and not pending
         )
 
     def _sync_controls(self):

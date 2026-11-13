@@ -6,6 +6,12 @@ import threading
 import time
 import shutil
 import shlex
+
+_startup_screen = None
+if __name__ == "__main__":
+    from Application.startup import start_startup_screen
+    _startup_screen = start_startup_screen()
+
 from datetime import datetime, timedelta
 from pathlib import Path
 import cv2
@@ -84,12 +90,16 @@ from .ui.widgets.control_centre_overlay import ControlCentreOverlay
 
 class MainApp(QWidget, TaskRunnerMixin):
     app_finished_signal = pyqtSignal()
+    startup_ready = pyqtSignal()
 
     def __init__(self):
         super().__init__()
         log_info("Starting Titans HTPC Launcher...")
         self.config = load_config()
         self._launcher_update_service = GitHubUpdateService(self)
+        self._launcher_update_service.installed.connect(self.offer_restart_after_update)
+        self._launcher_update_restart_pending = False
+        self._restart_requested = False
         self._base_application_font = QApplication.font()
         self._base_application_palette = QApplication.palette()
         self.controller_capture_active = False
@@ -107,6 +117,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.shortcut_keyboard = None
         self.shortcut_keyboard_error = None
         self.launcher_sleeping = False
+        self._startup_controller_ready = not PYGAME_AVAILABLE
         self.controller_back_suppressed_until = 0.0
         self.reload_controller_profile()
         self.cap = None
@@ -149,6 +160,7 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         if PYGAME_AVAILABLE:
             self.controller_thread = PygameControllerThread(self)
+            self.controller_thread.initialized.connect(self.controller_initialized)
             self.controller_thread.raw_input.connect(self.handle_controller_input)
             self.controller_thread.button_pressed.connect(self.handle_controller_button_pressed)
             self.controller_thread.button_released.connect(self.handle_controller_button_released)
@@ -159,6 +171,10 @@ class MainApp(QWidget, TaskRunnerMixin):
             self.controller_thread.browser_pointer.connect(self.handle_browser_pointer)
             self.controller_thread.browser_pointer_error.connect(self.handle_browser_pointer_error)
             self.controller_thread.start()
+
+    def controller_initialized(self):
+        self._startup_controller_ready = True
+        self.startup_ready.emit()
 
     def reload_controller_profile(self):
         profile_name = self.config.get("_controller_profile", "Xbox Controller.json")
@@ -719,6 +735,24 @@ class MainApp(QWidget, TaskRunnerMixin):
         dialog.no_btn.hide()
         dialog.yes_btn.setText("OK")
         dialog.exec()
+
+    def offer_restart_after_update(self):
+        self._launcher_update_restart_pending = True
+        if not self.launcher_sleeping:
+            QTimer.singleShot(0, self.prompt_restart_after_update)
+
+    def prompt_restart_after_update(self):
+        if not self._launcher_update_restart_pending or self.launcher_sleeping:
+            return
+        self._launcher_update_restart_pending = False
+        answer = QMessageBox.question(
+            self, "Restart Titans Launcher",
+            "The launcher update was installed. Restart Titans now to apply it? "
+            "Your computer will not reboot.",
+        )
+        if answer == QMessageBox.StandardButton.Yes and self.close():
+            self._restart_requested = True
+            QApplication.quit()
 
     def closeEvent(self, event):
         log_info("Checking async tasks before launcher shutdown.")
@@ -1407,6 +1441,8 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.launcher_sleeping = False
         self.controller_back_suppressed_until = time.monotonic() + 1.0
         self.showFullScreen()
+        if getattr(self, "_launcher_update_restart_pending", False):
+            QTimer.singleShot(0, self.prompt_restart_after_update)
         if hasattr(self, "clock_timer"):
             self.clock_timer.start(1000)
         self.update_clock_display()
@@ -1781,12 +1817,44 @@ class MainApp(QWidget, TaskRunnerMixin):
                 return
         super().keyPressEvent(event)
 
-def main():
-    app = QApplication(sys.argv)
-    window = MainApp()
-    window.show()
-    sys.exit(app.exec())
+def main(startup_screen=None):
+    try:
+        app = QApplication(sys.argv)
+        window = MainApp()
+        window.show()
+        if startup_screen is not None:
+            def finish_startup():
+                nonlocal startup_screen
+                if startup_screen is None:
+                    return
+                startup_screen.close()
+                startup_screen = None
+                window.raise_()
+                window.activateWindow()
+
+            def startup_timeout():
+                if startup_screen is not None:
+                    log_warning("Controller startup timed out; continuing without waiting.")
+                    finish_startup()
+
+            if getattr(window, "_startup_controller_ready", True):
+                QTimer.singleShot(0, finish_startup)
+            else:
+                window.startup_ready.connect(finish_startup)
+                QTimer.singleShot(8000, startup_timeout)
+        exit_code = app.exec()
+    finally:
+        if startup_screen is not None:
+            startup_screen.close()
+    if window._restart_requested:
+        try:
+            os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+        except OSError as error:
+            log_error(f"Could not restart Titans Launcher: {error}")
+            print(f"Could not restart Titans Launcher: {error}", file=sys.stderr)
+            exit_code = 1
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
-    main()
+    main(_startup_screen)

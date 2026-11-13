@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -9,6 +10,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path, PurePosixPath
 from urllib.request import Request, urlopen
+from urllib.parse import quote
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
@@ -25,14 +27,13 @@ from Application.ui.Settings.Logger import log_error, log_warning
 
 
 GITHUB_REPOSITORY = "kenshin210/Titans_Launcher"
-GITHUB_REPOSITORY_URL = f"https://github.com/{GITHUB_REPOSITORY}.git"
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
-UPDATE_CHANNELS = ("Stable", "Beta")
+UPDATE_CHANNELS = ("Stable", "Beta", "Custom")
 DEFAULT_UPDATE_CHANNEL = "Stable"
 UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000
 MAX_API_RESPONSE_BYTES = 5_000_000
 MAX_ARCHIVE_BYTES = 100_000_000
 MAX_ARCHIVE_FILE_BYTES = 50_000_000
+RESTART_FREE_FILES = {"ArchModuleInstall.sh", "generate_launcher_manifest.py"}
 
 
 def _read_url(url, accept, max_bytes):
@@ -62,16 +63,40 @@ def _read_json(url):
     return result
 
 
-def fetch_branch_tree(branch):
-    if branch not in UPDATE_CHANNELS:
-        raise ValueError(f"Unsupported launcher update channel: {branch}")
-    commit = _read_json(f"{GITHUB_API_URL}/commits/{branch}")
+def validate_custom_source(repository, branch):
+    if not isinstance(repository, str) or not re.fullmatch(
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}",
+        repository,
+    ) or repository.split("/")[1] in (".", ".."):
+        raise ValueError("Enter a public GitHub repository as owner/repository.")
+    if (
+        not isinstance(branch, str) or not branch or branch == "@"
+        or branch.startswith(("-", "/")) or branch.endswith(("/", "."))
+        or ".." in branch or "@{" in branch or "//" in branch
+        or any(ord(char) < 33 or ord(char) == 127 or char in "~^:?*[\\" for char in branch)
+        or any(part.startswith(".") or part.endswith(".lock") for part in branch.split("/"))
+    ):
+        raise ValueError("Enter a valid Git branch name.")
+
+
+def fetch_branch_tree(branch, repository=GITHUB_REPOSITORY):
+    validate_custom_source(repository, branch)
+    api_url = f"https://api.github.com/repos/{repository}"
+    ref = _read_json(f"{api_url}/git/ref/heads/{quote(branch, safe='')}")
+    ref_object = ref.get("object")
+    if not isinstance(ref_object, dict) or ref_object.get("type") != "commit":
+        raise ValueError(f"GitHub did not return a valid {branch} branch ref.")
+    ref_sha = ref_object.get("sha")
+    if not isinstance(ref_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", ref_sha):
+        raise ValueError(f"GitHub did not return a valid {branch} branch commit.")
+    commit = _read_json(f"{api_url}/commits/{ref_sha}")
     commit_sha = commit.get("sha")
     tree_sha = commit.get("commit", {}).get("tree", {}).get("sha")
-    if not isinstance(commit_sha, str) or not isinstance(tree_sha, str):
+    if not all(isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)
+               for sha in (commit_sha, tree_sha)) or commit_sha != ref_sha:
         raise ValueError(f"GitHub did not return a valid {branch} branch commit.")
 
-    tree = _read_json(f"{GITHUB_API_URL}/git/trees/{tree_sha}?recursive=1")
+    tree = _read_json(f"{api_url}/git/trees/{tree_sha}?recursive=1")
     if tree.get("truncated"):
         raise ValueError("GitHub's repository tree response was truncated.")
     entries = tree.get("tree")
@@ -88,7 +113,7 @@ def fetch_branch_tree(branch):
         if entry.get("type") != "blob" or entry.get("mode") not in {"100644", "100755"}:
             raise ValueError(f"Unsupported launcher file type in GitHub tree: {path}")
         file_sha = entry.get("sha")
-        if not isinstance(file_sha, str):
+        if not isinstance(file_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", file_sha):
             raise ValueError(f"GitHub did not return a valid file hash for {path}.")
         files[path] = file_sha
     if not files:
@@ -97,7 +122,7 @@ def fetch_branch_tree(branch):
     message = commit.get("commit", {}).get("message", "")
     return {
         "sha": commit_sha,
-        "message": message.splitlines()[0] if isinstance(message, str) else "",
+        "message": message.splitlines()[0] if isinstance(message, str) and message else "",
         "files": files,
     }
 
@@ -118,8 +143,17 @@ def _safe_build_path(name):
     return path
 
 
+def _changed_manifest_files(before, after):
+    return sorted(name for name in set(before) | set(after) if before.get(name) != after.get(name))
+
+
+def _is_sound_asset(name):
+    return PurePosixPath(name).parts[:2] == ("Assets", "Sounds")
+
+
 class GitHubUpdateService(QObject, TaskRunnerMixin):
     changed = pyqtSignal()
+    installed = pyqtSignal()
 
     def __init__(self, owner=None, root=PROJECT_ROOT, auto_start=True):
         super().__init__(owner if isinstance(owner, QObject) else None)
@@ -128,8 +162,14 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         self.busy = False
         self.installing = False
         self.available = False
+        self.restart_required = False
         self.status = "GitHub update check has not run yet."
         self.remote_info = None
+        try:
+            self._runtime_manifest = make_manifest(self.root)
+        except OSError as error:
+            self._runtime_manifest = None
+            log_warning(f"Could not record launcher files at startup: {error}")
         self._timer = QTimer(self)
         self._timer.setInterval(UPDATE_INTERVAL_MS)
         self._timer.timeout.connect(self.check)
@@ -138,7 +178,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             QTimer.singleShot(15_000, self.check)
 
     @property
-    def branch(self):
+    def channel(self):
         config = getattr(self.owner, "config", None)
         branch = (
             config.get("_launcher_update_branch", DEFAULT_UPDATE_CHANNEL)
@@ -150,8 +190,26 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             return DEFAULT_UPDATE_CHANNEL
         return branch
 
+    @property
+    def custom_repository(self):
+        config = getattr(self.owner, "config", None)
+        return config.get("_launcher_custom_repository", "") if isinstance(config, dict) else ""
+
+    @property
+    def custom_branch(self):
+        config = getattr(self.owner, "config", None)
+        return config.get("_launcher_custom_branch", "main") if isinstance(config, dict) else "main"
+
+    @property
+    def branch(self):
+        return self.custom_branch if self.channel == "Custom" else self.channel
+
+    @property
+    def repository(self):
+        return self.custom_repository if self.channel == "Custom" else GITHUB_REPOSITORY
+
     def set_branch(self, branch):
-        if branch not in UPDATE_CHANNELS:
+        if branch not in UPDATE_CHANNELS[:2]:
             raise ValueError(f"Unsupported launcher update channel: {branch}")
         if self.busy:
             raise RuntimeError("Wait for the current launcher update task to finish.")
@@ -171,17 +229,52 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         self.changed.emit()
         self.check()
 
+    def set_custom_source(self, repository, branch):
+        if self.busy:
+            raise RuntimeError("Wait for the current launcher update task to finish.")
+        if not isinstance(repository, str) or not isinstance(branch, str):
+            raise ValueError("Enter a public GitHub repository and branch.")
+        repository, branch = repository.strip(), branch.strip()
+        validate_custom_source(repository, branch)
+        config = getattr(self.owner, "config", None)
+        if not isinstance(config, dict):
+            raise RuntimeError("Launcher update settings are unavailable.")
+        if (self.channel, self.custom_repository, self.custom_branch) == ("Custom", repository, branch):
+            return
+        config.update({
+            "_launcher_update_branch": "Custom",
+            "_launcher_custom_repository": repository,
+            "_launcher_custom_branch": branch,
+        })
+        save_config = getattr(self.owner, "save_config_file", None)
+        if callable(save_config):
+            save_config()
+        self.available = False
+        self.remote_info = None
+        self.status = f"Checking {repository} branch {branch}..."
+        self.changed.emit()
+        self.check()
+
     def check(self):
         if self.busy:
             return
-        branch = self.branch
+        branch, repository, channel = self.branch, self.repository, self.channel
+        try:
+            validate_custom_source(repository, branch)
+        except ValueError as error:
+            self.available = False
+            self.remote_info = None
+            self.status = f"Could not check GitHub for launcher updates: {error}"
+            log_warning(self.status)
+            self.changed.emit()
+            return
         self.busy = True
-        self.status = f"Checking GitHub's {branch} branch for launcher updates..."
+        self.status = f"Checking GitHub {repository} branch {branch} for launcher updates..."
         self.changed.emit()
-        self.run_async(lambda: self._check_remote(branch), self._complete_check)
+        self.run_async(lambda: self._check_remote(branch, repository, channel), self._complete_check)
 
-    def _check_remote(self, branch):
-        remote = fetch_branch_tree(branch)
+    def _check_remote(self, branch, repository, channel):
+        remote = fetch_branch_tree(branch, repository)
         local_files = {}
         for name in build_files(self.root):
             local_files[name] = _git_blob_sha((self.root / name).read_bytes())
@@ -190,7 +283,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             for name in set(remote["files"]) | set(local_files)
             if remote["files"].get(name) != local_files.get(name)
         )
-        return {**remote, "branch": branch, "changed_files": changed_files}
+        return {**remote, "branch": branch, "repository": repository,
+                "channel": channel, "changed_files": changed_files}
 
     def _complete_check(self, result):
         self.busy = False
@@ -204,27 +298,29 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             self.available = bool(result["changed_files"])
             if self.available:
                 self.status = (
-                    f"Launcher update available on GitHub {result['branch']} "
+                    f"Launcher update available on GitHub {result['repository']} "
+                    f"branch {result['branch']} "
                     f"({result['sha'][:7]}; {len(result['changed_files'])} changed files)."
                 )
-                self._notify_available(result["sha"], result["branch"])
+                self._notify_available(result["sha"], result["branch"], result["repository"])
             else:
                 self.status = (
-                    f"The launcher is up to date with GitHub {result['branch']}."
+                    f"The launcher is up to date with GitHub {result['repository']} branch {result['branch']}."
                 )
         self.changed.emit()
 
-    def _notify_available(self, commit_sha, branch):
+    def _notify_available(self, commit_sha, branch, repository):
         config = getattr(self.owner, "config", None)
         notified = config.get("_github_launcher_update_notified", {}) if isinstance(config, dict) else {}
-        previous_sha = notified.get(branch) if isinstance(notified, dict) else None
+        key = branch if repository == GITHUB_REPOSITORY else f"{repository}/{branch}"
+        previous_sha = notified.get(key) if isinstance(notified, dict) else None
         if previous_sha == commit_sha:
             return
 
         if isinstance(config, dict):
             config["_github_launcher_update_notified"] = {
                 **(notified if isinstance(notified, dict) else {}),
-                branch: commit_sha,
+                key: commit_sha,
             }
             save_config = getattr(self.owner, "save_config_file", None)
             if callable(save_config):
@@ -239,7 +335,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
                 [
                     notify_send,
                     "Titans Launcher update available",
-                    f"GitHub {branch} has a new launcher update ({commit_sha[:7]}).",
+                    f"GitHub {repository} branch {branch} has a new launcher update ({commit_sha[:7]}).",
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -270,12 +366,45 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         else:
             self.available = False
             self.remote_info = None
+            installed_manifest = result.get("installed_manifest")
+            changed_files = result.get("changed_files")
+            if (
+                self._runtime_manifest is None
+                or not isinstance(installed_manifest, dict)
+                or not isinstance(changed_files, list)
+            ):
+                self.restart_required = True
+            else:
+                runtime_changes = _changed_manifest_files(self._runtime_manifest, installed_manifest)
+                all_changes = set(changed_files) | set(runtime_changes)
+                self.restart_required = self.restart_required or any(
+                    name not in RESTART_FREE_FILES and not _is_sound_asset(name)
+                    for name in all_changes
+                )
+                sound_changes = [name for name in all_changes if _is_sound_asset(name)]
+                if sound_changes:
+                    player = getattr(self.owner, "nav_sound", None)
+                    forget = getattr(player, "forget", None)
+                    if not callable(forget):
+                        log_warning("Could not refresh navigation sounds; restart is required.")
+                        self.restart_required = True
+                    else:
+                        try:
+                            for name in sound_changes:
+                                forget(self.root / name)
+                        except (OSError, RuntimeError) as error:
+                            log_warning(f"Could not refresh navigation sounds: {error}")
+                            self.restart_required = True
             self.status = (
-                f"Launcher update installed from GitHub {result['branch']} "
+                f"Launcher update installed from GitHub {result.get('repository', GITHUB_REPOSITORY)} "
+                f"branch {result['branch']} "
                 f"({result['sha'][:7]}). "
-                "Restart Titans Launcher to apply it."
+                + ("Restart Titans Launcher to apply it." if self.restart_required
+                   else "Update complete; no launcher restart is needed.")
             )
         self.changed.emit()
+        if not isinstance(result, Exception) and self.restart_required:
+            self.installed.emit()
 
     def _install_remote(self, remote_info):
         if not self.root.is_dir():
@@ -304,13 +433,21 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
                 "This Git checkout has local changes. Preserve them and update it manually."
             )
 
+        previous_manifest = make_manifest(self.root)
         branch = remote_info["branch"]
-        self._run_git("fetch", "--no-tags", GITHUB_REPOSITORY_URL, branch)
-        if self._run_git("branch", "--list", branch):
+        repository = remote_info.get("repository", GITHUB_REPOSITORY)
+        validate_custom_source(repository, branch)
+        self._run_git("fetch", "--no-tags", f"https://github.com/{repository}.git", f"refs/heads/{branch}")
+        if remote_info.get("channel") == "Custom":
+            if self._run_git("rev-parse", "FETCH_HEAD") != remote_info["sha"]:
+                raise RuntimeError("The custom branch changed since the update check. Check again before installing.")
+            self._run_git("switch", "--detach", "FETCH_HEAD")
+        elif self._run_git("branch", "--list", branch):
             self._run_git("switch", branch)
             self._run_git("merge", "--ff-only", "FETCH_HEAD")
         else:
             self._run_git("switch", "--create", branch, "FETCH_HEAD")
+        installed_manifest = make_manifest(self.root)
         manifest_path = self.root / MANIFEST_NAME
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -321,7 +458,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             delete=False,
         ) as manifest_file:
             temporary_manifest = Path(manifest_file.name)
-            json.dump(make_manifest(self.root), manifest_file, indent=2, sort_keys=True)
+            json.dump(installed_manifest, manifest_file, indent=2, sort_keys=True)
             manifest_file.write("\n")
         try:
             os.replace(temporary_manifest, manifest_path)
@@ -336,10 +473,17 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         return {
             "sha": self._run_git("rev-parse", "HEAD"),
             "branch": branch,
+            "repository": repository,
             "mode": "git",
+            "changed_files": _changed_manifest_files(previous_manifest, installed_manifest),
+            "installed_manifest": installed_manifest,
         }
 
     def _update_archive(self, remote_info):
+        repository = remote_info.get("repository", GITHUB_REPOSITORY)
+        validate_custom_source(repository, remote_info["branch"])
+        if not re.fullmatch(r"[0-9a-f]{40}", remote_info["sha"]):
+            raise ValueError("Invalid GitHub commit hash.")
         errors, _ = check_launcher(self.root)
         if errors:
             raise RuntimeError(
@@ -349,7 +493,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             )
 
         archive_data = _read_url(
-            f"https://codeload.github.com/{GITHUB_REPOSITORY}/zip/{remote_info['sha']}",
+            f"https://codeload.github.com/{repository}/zip/{remote_info['sha']}",
             "application/zip",
             MAX_ARCHIVE_BYTES,
         )
@@ -463,5 +607,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         return {
             "sha": remote_info["sha"],
             "branch": remote_info["branch"],
+            "repository": repository,
             "mode": "archive",
+            "changed_files": _changed_manifest_files(old_manifest, manifest),
+            "installed_manifest": manifest,
         }

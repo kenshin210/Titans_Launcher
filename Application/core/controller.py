@@ -73,6 +73,7 @@ class AxisRepeater:
 
 class PygameControllerThread(QThread):
     raw_input = pyqtSignal(str)
+    initialized = pyqtSignal()
     button_pressed = pyqtSignal(int, int)
     button_released = pyqtSignal(int, int)
     controller_removed = pyqtSignal(int)
@@ -100,6 +101,7 @@ class PygameControllerThread(QThread):
     def run(self):
         if not PYGAME_AVAILABLE or pygame is None:
             log_warning("pygame-ce module not available. Gamepad input disabled.")
+            self.initialized.emit()
             return
 
         try:
@@ -108,6 +110,7 @@ class PygameControllerThread(QThread):
                 pygame.joystick.init()
         except Exception as error:
             log_error(f"Failed to initialize pygame joystick subsystem: {error}")
+            self.initialized.emit()
             return
 
         joysticks = {}
@@ -115,6 +118,7 @@ class PygameControllerThread(QThread):
         pointer_poller = None
         pointer_error_reported = False
         shortcuts = ControllerShortcut()
+        initialized = False
 
         while not self._stop_event.is_set() and not self.isInterruptionRequested():
             try:
@@ -149,6 +153,10 @@ class PygameControllerThread(QThread):
                             f"Pygame-ce detected controller: {joystick.get_name()} "
                             f"(ID: {joystick_index})"
                         )
+
+                if not initialized:
+                    initialized = True
+                    self.initialized.emit()
 
                 for event in pygame.event.get():
                     if event.type == pygame.JOYBUTTONDOWN:
@@ -205,6 +213,9 @@ class PygameControllerThread(QThread):
                 if self._browser_pointer_enabled.is_set():
                     self.browser_pointer.emit(0.0, 0.0, 0.0, 0.0)
                 log_warning(f"Pygame controller polling error: {error}")
+                if not initialized:
+                    initialized = True
+                    self.initialized.emit()
                 if not pygame.joystick.get_init():
                     try:
                         with _background_joystick_events():
