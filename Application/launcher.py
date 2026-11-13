@@ -95,6 +95,13 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.controller_capture_active = False
         self.active_app_process = None
         self.active_app_controller_close_enabled = False
+        self.active_app_is_firefox = False
+        self.antimicrox_process = None
+        self.controller_back_hold = None
+        self.controller_back_hold_timer = QTimer(self)
+        self.controller_back_hold_timer.setSingleShot(True)
+        self.controller_back_hold_timer.setInterval(1200)
+        self.controller_back_hold_timer.timeout.connect(self.close_active_app_on_back_hold)
         self.browser_controller = None
         self.browser_controller_error = None
         self.shortcut_keyboard = None
@@ -143,6 +150,10 @@ class MainApp(QWidget, TaskRunnerMixin):
         if PYGAME_AVAILABLE:
             self.controller_thread = PygameControllerThread(self)
             self.controller_thread.raw_input.connect(self.handle_controller_input)
+            self.controller_thread.button_pressed.connect(self.handle_controller_button_pressed)
+            self.controller_thread.button_released.connect(self.handle_controller_button_released)
+            self.controller_thread.controller_removed.connect(self.handle_controller_removed)
+            self.controller_thread.controllers_reset.connect(self.cancel_controller_back_hold)
             self.controller_thread.axis_repeat.connect(self.handle_controller_axis_repeat)
             self.controller_thread.keyboard_shortcut.connect(self.toggle_shortcut_keyboard)
             self.controller_thread.browser_pointer.connect(self.handle_browser_pointer)
@@ -159,6 +170,48 @@ class MainApp(QWidget, TaskRunnerMixin):
             and map_raw_input(input_name, self.controller_bindings) in ("up", "down")
         ):
             self.handle_controller_input(input_name)
+
+    def handle_controller_button_pressed(self, instance_id, button):
+        if (
+            self.controller_back_hold is None
+            and not self.controller_capture_active
+            and self.shortcut_keyboard is None
+            and self.shortcut_keyboard_error is None
+            and self.launcher_sleeping
+            and self.active_app_process is not None
+            and map_raw_input(f"button:{button}", self.controller_bindings) == "back"
+        ):
+            self.controller_back_hold = (instance_id, button)
+            self.controller_back_hold_timer.start()
+
+    def handle_controller_button_released(self, instance_id, button):
+        if self.controller_back_hold == (instance_id, button):
+            self.cancel_controller_back_hold()
+
+    def handle_controller_removed(self, instance_id):
+        if self.controller_back_hold is not None and self.controller_back_hold[0] == instance_id:
+            self.cancel_controller_back_hold()
+
+    def cancel_controller_back_hold(self):
+        self.controller_back_hold_timer.stop()
+        self.controller_back_hold = None
+
+    def close_active_app_on_back_hold(self):
+        held = self.controller_back_hold
+        self.controller_back_hold = None
+        process = self.active_app_process
+        if (
+            held is None or not self.launcher_sleeping or self.controller_capture_active
+            or self.shortcut_keyboard is not None or self.shortcut_keyboard_error is not None
+            or process is None
+        ):
+            return
+        if process.poll() is None:
+            try:
+                process.terminate()
+                log_info("Closing the launched application after holding controller Back.")
+            except OSError as error:
+                log_error(f"Failed to close launched application: {error}", details=str(error))
 
     def handle_controller_input(self, input_name):
         if self.controller_capture_active:
@@ -188,7 +241,10 @@ class MainApp(QWidget, TaskRunnerMixin):
                         log_error(f"Failed to close launched application: {error}", details=str(error))
             elif action and self.browser_controller:
                 try:
-                    self.browser_controller.handle_action(action)
+                    if action == "back" and getattr(self, "active_app_is_firefox", False):
+                        self.browser_controller.browser_back()
+                    else:
+                        self.browser_controller.handle_action(action)
                 except OSError as error:
                     self.disable_browser_controller(error)
             return
@@ -1192,22 +1248,36 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         executable_name = Path(executable).name.lower()
         is_website = data.get("type") == "website"
-        is_firefox_website = (
-            is_website and executable_name in ("firefox", "firefox-esr")
-        )
         manage_antimicrox = data.get("manage_antimicrox", False)
         profile_path = data.get("profile", "")
+        is_firefox = executable_name in ("firefox", "firefox-esr")
+        antimicrox_process = getattr(self, "antimicrox_process", None)
+        if is_firefox and antimicrox_process is not None:
+            try:
+                if antimicrox_process.poll() is None:
+                    antimicrox_process.terminate()
+                    antimicrox_process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                log_error(f"Could not stop the launcher-managed AntiMicroX profile: {error}")
+                self.show_error_overlay(
+                    "Controller Profile Error",
+                    f"Could not stop the launcher-managed AntiMicroX profile:\n{error}",
+                )
+                return
+            self.antimicrox_process = None
         antimicrox_profile_active = bool(
-            manage_antimicrox and profile_path and Path(profile_path).exists()
+            not is_firefox and manage_antimicrox and profile_path and Path(profile_path).exists()
         )
         use_virtual_controller = not antimicrox_profile_active
-        if manage_antimicrox and (not is_firefox_website or profile_path):
+        if is_firefox and manage_antimicrox and profile_path:
+            log_info("Using Titans controller input instead of the configured AntiMicroX profile for Firefox.")
+        if manage_antimicrox and not is_firefox:
             log_info("Managing AntiMicroX: Terminating existing antimicrox instances.")
             subprocess.run(["pkill", "-f", "antimicrox"])
 
             if profile_path and Path(profile_path).exists():
                 log_info(f"Applying AntiMicroX profile: {profile_path}")
-                subprocess.Popen([
+                self.antimicrox_process = subprocess.Popen([
                     "antimicrox",
                     "--profile", profile_path,
                     "--hidden",
@@ -1287,6 +1357,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             proc = subprocess.Popen(cmd_list, env={**os.environ, **proxy_environment(self.config)})
             self.active_app_process = proc
             self.active_app_controller_close_enabled = controller_close_enabled
+            self.active_app_is_firefox = is_firefox
             log_info(f"Application '{executable}' running (PID: {proc.pid})")
         except Exception as e:
             if self.browser_controller:
@@ -1321,6 +1392,8 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def on_app_finished(self):
         log_info("Restoring launcher interface after application exit.")
+        if hasattr(self, "controller_back_hold_timer"):
+            self.cancel_controller_back_hold()
         if self.shortcut_keyboard is not None:
             self.shortcut_keyboard.reject()
         if hasattr(self, "controller_thread"):
@@ -1330,6 +1403,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             self.browser_controller = None
         self.active_app_process = None
         self.active_app_controller_close_enabled = False
+        self.active_app_is_firefox = False
         self.launcher_sleeping = False
         self.controller_back_suppressed_until = time.monotonic() + 1.0
         self.showFullScreen()

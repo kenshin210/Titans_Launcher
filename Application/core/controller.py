@@ -73,6 +73,10 @@ class AxisRepeater:
 
 class PygameControllerThread(QThread):
     raw_input = pyqtSignal(str)
+    button_pressed = pyqtSignal(int, int)
+    button_released = pyqtSignal(int, int)
+    controller_removed = pyqtSignal(int)
+    controllers_reset = pyqtSignal()
     axis_repeat = pyqtSignal(str)
     keyboard_shortcut = pyqtSignal()
     browser_pointer = pyqtSignal(float, float, float, float)
@@ -119,6 +123,7 @@ class PygameControllerThread(QThread):
                         pygame.joystick.init()
                     joysticks.clear()
                     axis_repeater.clear()
+                    self.controllers_reset.emit()
                     log_info("Reinitialized pygame joystick subsystem.")
 
                 pygame.event.pump()
@@ -150,10 +155,12 @@ class PygameControllerThread(QThread):
                         mapping = pointer_poller.button_mapping(event.instance_id) if pointer_poller else None
                         inputs, activate = shortcuts.button(event.instance_id, event.button, True, mapping)
                         for input_name in inputs:
+                            self.button_pressed.emit(event.instance_id, event.button)
                             self.raw_input.emit(input_name)
                         if activate:
                             self.keyboard_shortcut.emit()
                     elif event.type == pygame.JOYBUTTONUP:
+                        self.button_released.emit(event.instance_id, event.button)
                         mapping = pointer_poller.button_mapping(event.instance_id) if pointer_poller else None
                         inputs, activate = shortcuts.button(event.instance_id, event.button, False, mapping)
                         for input_name in inputs:
@@ -161,6 +168,7 @@ class PygameControllerThread(QThread):
                         if activate:
                             self.keyboard_shortcut.emit()
                     elif event.type == pygame.JOYDEVICEREMOVED:
+                        self.controller_removed.emit(event.instance_id)
                         shortcuts.remove(event.instance_id)
                         axis_repeater.remove(event.instance_id)
                         joysticks.clear()
@@ -193,6 +201,7 @@ class PygameControllerThread(QThread):
                 if self._stop_event.is_set() or self.isInterruptionRequested():
                     break
                 axis_repeater.clear()
+                self.controllers_reset.emit()
                 if self._browser_pointer_enabled.is_set():
                     self.browser_pointer.emit(0.0, 0.0, 0.0, 0.0)
                 log_warning(f"Pygame controller polling error: {error}")

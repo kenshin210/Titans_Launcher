@@ -35,7 +35,7 @@ class VirtualKeyboard:
                                if char in "abcdefghijklmnopqrstuvwxyz"})
         try:
             self.device = UInput(
-                {ecodes.EV_KEY: list({*self.keys.values(), ecodes.KEY_LEFTSHIFT,
+                {ecodes.EV_KEY: list({*self.keys.values(), ecodes.KEY_LEFTSHIFT, ecodes.KEY_LEFTALT,
                                       ecodes.KEY_BACKSPACE,
                                       *(key for key, _ in self.text_keys.values())})},
                 name="Titans Launcher virtual keyboard",
@@ -77,6 +77,14 @@ class VirtualKeyboard:
         self.device.write(self.ecodes.EV_KEY, key, 1)
         self.device.syn()
         self.device.write(self.ecodes.EV_KEY, key, 0)
+        self.device.syn()
+
+    def browser_back(self):
+        self.device.write(self.ecodes.EV_KEY, self.ecodes.KEY_LEFTALT, 1)
+        self.device.write(self.ecodes.EV_KEY, self.ecodes.KEY_LEFT, 1)
+        self.device.syn()
+        self.device.write(self.ecodes.EV_KEY, self.ecodes.KEY_LEFT, 0)
+        self.device.write(self.ecodes.EV_KEY, self.ecodes.KEY_LEFTALT, 0)
         self.device.syn()
 
     def close(self):
