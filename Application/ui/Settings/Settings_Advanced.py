@@ -43,6 +43,7 @@ from Application.ui.Settings.NotificationInboxWidget import NotificationInboxWid
 from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySettingsWidget
 from Application.ui.Settings.HomeProfilesWidget import HomeProfilesWidget
 from Application.ui.Settings.ButtonStyleWidget import ButtonStyleWidget
+from Application.ui.Settings.StartupScreenSettings import StartupScreenSettingsWidget
 from Application.core import corner_style
 
 AboutDeviceWidget = import_module(
@@ -94,6 +95,7 @@ class AdvancedSettingsWidget(QWidget):
         self.general_subsections = [
             ("General", "general", self.create_general_page),
             ("Background", "background", self.create_background_page),
+            ("Startup", "startup", lambda: StartupScreenSettingsWidget(self.launcher)),
             ("Theme", "theme", self.create_theme_page),
             ("Buttons", "buttons", lambda: ButtonStyleWidget(self.launcher)),
             ("Power", "power", self.create_power_page),
