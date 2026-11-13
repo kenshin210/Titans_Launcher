@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -33,8 +34,46 @@ def _background_joystick_events():
             os.environ[name] = previous
 
 
+class AxisRepeater:
+    def __init__(self):
+        self.active_axes = {}
+
+    def update(self, instance_id, axis, value, now):
+        key = (instance_id, axis)
+        if value <= -0.5:
+            axis_input = f"axis:{axis}:negative"
+        elif value >= 0.5:
+            axis_input = f"axis:{axis}:positive"
+        else:
+            self.active_axes.pop(key, None)
+            return None
+
+        current = self.active_axes.get(key)
+        if current is None or current[0] != axis_input:
+            self.active_axes[key] = (axis_input, now + 0.35)
+            return axis_input
+        return None
+
+    def due(self, now):
+        inputs = []
+        for key, (axis_input, next_repeat) in self.active_axes.items():
+            if now >= next_repeat:
+                inputs.append(axis_input)
+                self.active_axes[key] = (axis_input, now + 0.09)
+        return inputs
+
+    def remove(self, instance_id):
+        for key in list(self.active_axes):
+            if key[0] == instance_id:
+                del self.active_axes[key]
+
+    def clear(self):
+        self.active_axes.clear()
+
+
 class PygameControllerThread(QThread):
     raw_input = pyqtSignal(str)
+    axis_repeat = pyqtSignal(str)
     keyboard_shortcut = pyqtSignal()
     browser_pointer = pyqtSignal(float, float, float, float)
     browser_pointer_error = pyqtSignal(str)
@@ -68,7 +107,7 @@ class PygameControllerThread(QThread):
             return
 
         joysticks = {}
-        active_axes = {}
+        axis_repeater = AxisRepeater()
         pointer_poller = None
         pointer_error_reported = False
         shortcuts = ControllerShortcut()
@@ -79,7 +118,7 @@ class PygameControllerThread(QThread):
                     with _background_joystick_events():
                         pygame.joystick.init()
                     joysticks.clear()
-                    active_axes.clear()
+                    axis_repeater.clear()
                     log_info("Reinitialized pygame joystick subsystem.")
 
                 pygame.event.pump()
@@ -123,6 +162,8 @@ class PygameControllerThread(QThread):
                             self.keyboard_shortcut.emit()
                     elif event.type == pygame.JOYDEVICEREMOVED:
                         shortcuts.remove(event.instance_id)
+                        axis_repeater.remove(event.instance_id)
+                        joysticks.clear()
                     elif event.type == pygame.JOYHATMOTION:
                         hat_x, hat_y = event.value
                         if hat_x == 1:
@@ -134,19 +175,14 @@ class PygameControllerThread(QThread):
                         elif hat_y == -1:
                             self.raw_input.emit("hat:down")
                     elif event.type == pygame.JOYAXISMOTION:
-                        axis_key = (event.joy, event.axis)
-                        if event.value <= -0.5:
-                            axis_input = f"axis:{event.axis}:negative"
-                        elif event.value >= 0.5:
-                            axis_input = f"axis:{event.axis}:positive"
-                        else:
-                            axis_input = None
-
-                        if axis_input and active_axes.get(axis_key) != axis_input:
+                        axis_input = axis_repeater.update(
+                            event.instance_id, event.axis, event.value, time.monotonic()
+                        )
+                        if axis_input:
                             self.raw_input.emit(axis_input)
-                            active_axes[axis_key] = axis_input
-                        elif axis_input is None:
-                            active_axes.pop(axis_key, None)
+
+                for axis_input in axis_repeater.due(time.monotonic()):
+                    self.axis_repeat.emit(axis_input)
 
                 if self._browser_pointer_enabled.is_set():
                     if pointer_poller is not None:
@@ -156,6 +192,7 @@ class PygameControllerThread(QThread):
             except Exception as error:
                 if self._stop_event.is_set() or self.isInterruptionRequested():
                     break
+                axis_repeater.clear()
                 if self._browser_pointer_enabled.is_set():
                     self.browser_pointer.emit(0.0, 0.0, 0.0, 0.0)
                 log_warning(f"Pygame controller polling error: {error}")

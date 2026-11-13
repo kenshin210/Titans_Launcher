@@ -56,6 +56,7 @@ from .core.proxy import proxy_environment
 from .core.sound import NavigationSoundPlayer
 from .core.time_sync import fetch_ntp_time, start_ntp_sync_thread
 from .core.weather import fetch_current_weather
+from .core.github_update import GitHubUpdateService
 from .ui.InstallApps import AppsHubWidget
 from .ui.Settings.tab_style import tab_widget_stylesheet
 from .ui.Settings.AsyncTask import TaskRunnerMixin, cleanup_all_tasks
@@ -88,6 +89,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         super().__init__()
         log_info("Starting Titans HTPC Launcher...")
         self.config = load_config()
+        self._launcher_update_service = GitHubUpdateService(self)
         self._base_application_font = QApplication.font()
         self._base_application_palette = QApplication.palette()
         self.controller_capture_active = False
@@ -141,6 +143,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         if PYGAME_AVAILABLE:
             self.controller_thread = PygameControllerThread(self)
             self.controller_thread.raw_input.connect(self.handle_controller_input)
+            self.controller_thread.axis_repeat.connect(self.handle_controller_axis_repeat)
             self.controller_thread.keyboard_shortcut.connect(self.toggle_shortcut_keyboard)
             self.controller_thread.browser_pointer.connect(self.handle_browser_pointer)
             self.controller_thread.browser_pointer_error.connect(self.handle_browser_pointer_error)
@@ -149,6 +152,13 @@ class MainApp(QWidget, TaskRunnerMixin):
     def reload_controller_profile(self):
         profile_name = self.config.get("_controller_profile", "Xbox Controller.json")
         self.controller_bindings = load_controller_bindings(profile_name)
+
+    def handle_controller_axis_repeat(self, input_name):
+        if (
+            not self.controller_capture_active
+            and map_raw_input(input_name, self.controller_bindings) in ("up", "down")
+        ):
+            self.handle_controller_input(input_name)
 
     def handle_controller_input(self, input_name):
         if self.controller_capture_active:
@@ -234,7 +244,10 @@ class MainApp(QWidget, TaskRunnerMixin):
     def handle_browser_pointer(self, x, y, left_trigger, right_trigger):
         if self.launcher_sleeping and self.browser_controller:
             try:
-                self.browser_controller.handle_pointer(x, y, left_trigger, right_trigger)
+                self.browser_controller.handle_pointer(
+                    x, y, left_trigger, right_trigger,
+                    self.config.get("_browser_cursor_sensitivity", 18),
+                )
             except OSError as error:
                 self.disable_browser_controller(error)
 
@@ -279,6 +292,7 @@ class MainApp(QWidget, TaskRunnerMixin):
                     return
             dialog = OnScreenKeyboard(
                 None, "Type in active application", theme_color=self.get_theme_color(),
+                appearance=self.config,
                 input_device=device,
             )
         else:
@@ -291,6 +305,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             dialog = OnScreenKeyboard(
                 field.window(), field.placeholderText() or "Enter text", field.text(),
                 field.echoMode() != QLineEdit.EchoMode.Normal, theme_color=self.get_theme_color(),
+                appearance=self.config,
                 target_field=field,
             )
         self.shortcut_keyboard = dialog
@@ -339,10 +354,10 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def handle_browser_pointer_error(self, message):
         if self.launcher_sleeping and self.browser_controller:
-            self.browser_controller_error = f"Browser mouse unavailable: {message}"
+            self.browser_controller_error = f"External app cursor unavailable: {message}"
 
     def disable_browser_controller(self, error):
-        log_error(f"Browser controller input failed: {error}")
+        log_error(f"External app controller input failed: {error}")
         self.browser_controller_error = str(error)
         self.controller_thread.set_browser_pointer_enabled(False)
         self.browser_controller.close()
@@ -651,6 +666,14 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def closeEvent(self, event):
         log_info("Checking async tasks before launcher shutdown.")
+        launcher_update = getattr(self, "_launcher_update_service", None)
+        if launcher_update is not None and getattr(launcher_update, "installing", False) is True:
+            self.show_error_overlay(
+                "Launcher Update Still Running",
+                "Wait for the launcher update to finish before closing Titans.",
+            )
+            event.ignore()
+            return
         system_update = getattr(self, "_system_update", None)
         if system_update is not None and system_update.process is not None:
             self.show_error_overlay(
@@ -1169,16 +1192,19 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         executable_name = Path(executable).name.lower()
         is_website = data.get("type") == "website"
-        use_browser_controller = (
-            is_website
-            and executable_name in ("firefox", "firefox-esr")
-            and not (data.get("manage_antimicrox", False) and data.get("profile", ""))
+        is_firefox_website = (
+            is_website and executable_name in ("firefox", "firefox-esr")
         )
-        if data.get("manage_antimicrox", False) and not use_browser_controller:
+        manage_antimicrox = data.get("manage_antimicrox", False)
+        profile_path = data.get("profile", "")
+        antimicrox_profile_active = bool(
+            manage_antimicrox and profile_path and Path(profile_path).exists()
+        )
+        use_virtual_controller = not antimicrox_profile_active
+        if manage_antimicrox and (not is_firefox_website or profile_path):
             log_info("Managing AntiMicroX: Terminating existing antimicrox instances.")
             subprocess.run(["pkill", "-f", "antimicrox"])
 
-            profile_path = data.get("profile", "")
             if profile_path and Path(profile_path).exists():
                 log_info(f"Applying AntiMicroX profile: {profile_path}")
                 subprocess.Popen([
@@ -1239,18 +1265,21 @@ class MainApp(QWidget, TaskRunnerMixin):
                 arguments[0:0] = ["--profile", str(firefox_profile)]
         cmd_list.extend(arguments)
 
-        if use_browser_controller:
+        if use_virtual_controller:
             if not PYGAME_AVAILABLE:
-                log_warning("Firefox controller navigation requires pygame-ce.")
-                self.show_error_overlay("Controller Unavailable", "Install pygame-ce to use the controller in Firefox.")
+                log_warning("External app cursor control requires pygame-ce.")
+                self.show_error_overlay(
+                    "Controller Unavailable",
+                    "Install pygame-ce to control the cursor in a launched application.",
+                )
             else:
                 try:
                     self.browser_controller = BrowserController()
                 except (ImportError, OSError) as error:
-                    log_error(f"Could not enable Firefox controller navigation: {error}")
+                    log_error(f"Could not enable external app cursor control: {error}")
                     self.show_error_overlay(
                         "Controller Unavailable",
-                        f"Firefox controller navigation requires python-evdev and write access to /dev/uinput:\n{error}"
+                        f"External app cursor control requires python-evdev and write access to /dev/uinput:\n{error}"
                     )
 
         try:
@@ -1311,7 +1340,10 @@ class MainApp(QWidget, TaskRunnerMixin):
         if self.browser_controller_error:
             error = self.browser_controller_error
             self.browser_controller_error = None
-            self.show_error_overlay("Controller Input Failed", f"Firefox controller input stopped working:\n{error}")
+            self.show_error_overlay(
+                "Controller Input Failed",
+                f"External app controller input stopped working:\n{error}",
+            )
 
     def show_settings_page(self, section=None):
         if getattr(self, 'is_animating', False):

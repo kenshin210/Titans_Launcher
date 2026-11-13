@@ -311,8 +311,8 @@ class StorageOverviewWidget(QWidget):
         self.refresh()
 
 
-class Phase3SettingsWidget(QTabWidget):
-    """Keep refinement settings grouped and reachable through controller tabs."""
+class UserSessionsTabs(QTabWidget):
+    """Keep user and session settings reachable through controller tabs."""
 
     def __init__(self, launcher):
         super().__init__()

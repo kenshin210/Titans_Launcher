@@ -38,7 +38,7 @@ from Application.ui.Settings.tab_style import tab_widget_stylesheet, update_tab_
 from Application.ui.Settings.controller_focus import SettingsFocusOverlay
 from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWidget
 from Application.ui.Settings.UninstallApps import UninstallAppsWidget
-from Application.ui.Settings.Phase3Settings import Phase3SettingsWidget, NotificationSettingsWidget
+from Application.ui.Settings.UserNotificationStorageSettings import UserSessionsTabs, NotificationSettingsWidget
 from Application.ui.Settings.NotificationInboxWidget import NotificationInboxWidget
 from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySettingsWidget
 from Application.ui.Settings.HomeProfilesWidget import HomeProfilesWidget
@@ -112,7 +112,7 @@ class AdvancedSettingsWidget(QWidget):
             ("🚀  Applications", "applications", self.create_applications_container),
             ("🏠  Home Screen", "home_profiles", lambda: HomeProfilesWidget(self.launcher)),
             ("📊  Task Manager", "task_manager", lambda: TaskManagerWidget(self.launcher)),
-            ("👤  Users", "users", lambda: Phase3SettingsWidget(self.launcher)),
+            ("👤  Users", "users", lambda: UserSessionsTabs(self.launcher)),
             ("📬  Notification Inbox", "notification_inbox", lambda: NotificationInboxWidget(self.launcher)),
             ("📋  Logging", "logging", self.create_logging_page),
             ("ℹ  About Device", "about_device", lambda: AboutDeviceWidget(self.launcher)),
@@ -367,6 +367,7 @@ class AdvancedSettingsWidget(QWidget):
         desc = QLabel("Advanced mode is enabled. Use the sidebar button to switch back to the Basic Menu.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
+
         layout.addWidget(ControlCentreShortcutWidget(self.launcher))
         layout.addWidget(NavigationSoundCard(self.launcher))
         layout.addStretch()

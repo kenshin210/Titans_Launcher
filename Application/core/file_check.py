@@ -10,6 +10,30 @@ from Application.core.config import PROJECT_ROOT
 from Application.core.packages import valid_package_name
 
 MANIFEST_NAME = "launcher-files.sha256.json"
+ROOT_BUILD_FILES = {
+    "launcher.py",
+    "LinuxStartup.sh",
+    "ArchModuleInstall.sh",
+    "generate_launcher_manifest.py",
+}
+BUILD_ASSET_FOLDERS = {"Icons", "Sounds", "Styles"}
+
+
+def is_build_file_name(name):
+    if not isinstance(name, str):
+        return False
+    path = Path(name)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    if name in ROOT_BUILD_FILES:
+        return True
+    if path.parts[:1] == ("Application",):
+        return path.suffix == ".py"
+    return (
+        len(path.parts) > 2
+        and path.parts[0] == "Assets"
+        and path.parts[1] in BUILD_ASSET_FOLDERS
+    )
 
 
 def build_files(root):

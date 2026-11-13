@@ -24,7 +24,7 @@ FileCheckWidget = import_module(
 ).FileCheckWidget
 device_styles = import_module("Application.ui.Settings.About Device.DeviceStyles")
 StorageOverviewWidget = import_module(
-    "Application.ui.Settings.Phase3Settings"
+    "Application.ui.Settings.UserNotificationStorageSettings"
 ).StorageOverviewWidget
 
 create_device_page_title = device_styles.create_device_page_title

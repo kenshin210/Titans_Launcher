@@ -1,4 +1,5 @@
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -14,15 +15,32 @@ from PyQt6.QtWidgets import (
 )
 
 from Application.ui.dialogs.file_picker import resolve_theme_color
+from Application.ui.Settings.Logger import log_warning
 
-KEY_ROWS = [
-    list("1234567890"),
-    list("qwertyuiop"),
-    list("asdfghjkl'"),
-    list("zxcvbnm,.-"),
-    list("@_/:;!?#%&"),
-    list("[](){}$^*="),
-]
+KEYBOARD_PAGES = {
+    "letters": [
+        list("qwertyuiop"),
+        list("asdfghjkl"),
+        ["SHIFT", *list("zxcvbnm"), "BACKSPACE"],
+        ["PAGE_SYMBOLS", ",", "SPACE", ".", "ENTER"],
+    ],
+    "symbols": [
+        list("1234567890"),
+        list("@#$%&-+()"),
+        ["*", '"', "'", ":", ";", "!", "?", "BACKSPACE"],
+        ["PAGE_SYMBOLS_MORE", ",", "SPACE", ".", "ENTER"],
+    ],
+    "symbols_more": [
+        ["[", "]", "{", "}", "<", ">", "\\", "|", "~", "`"],
+        ["_", "^", "%", "&", "*", "-", "+", "=", "/", ";"],
+        ["#", "$", "'", '"', ":", "!", "?", "BACKSPACE"],
+        ["PAGE_LETTERS", ",", "SPACE", ".", "ENTER"],
+    ],
+}
+SPECIAL_KEY_TOKENS = {
+    "SHIFT", "BACKSPACE", "SPACE", "ENTER",
+    "PAGE_SYMBOLS", "PAGE_SYMBOLS_MORE", "PAGE_LETTERS",
+}
 SHIFT_SYMBOLS = {
     **dict(zip("1234567890", "!@#$%^&*()")),
     "'": '"', ",": "<", ".": ">", "-": "+", "/": "\\", ":": "=",
@@ -30,21 +48,101 @@ SHIFT_SYMBOLS = {
 }
 
 
+def _keyboard_config(parent):
+    widget = parent
+    while widget is not None:
+        owner = getattr(widget, "launcher", widget)
+        config = getattr(owner, "config", None)
+        if isinstance(config, dict):
+            return config
+        widget = widget.parentWidget()
+    return {}
+
+
+def _keyboard_color(config, key, default):
+    try:
+        color = QColor(config.get(key, default))
+    except TypeError:
+        color = QColor()
+    if not color.isValid():
+        log_warning(f"Invalid keyboard color for {key}; using {default}.")
+        return QColor(default)
+    return color
+
+
+class KeyboardCard(QWidget):
+    def __init__(self, image, color, opacity, parent=None):
+        super().__init__(parent)
+        self.image = image
+        self.color = color
+        self.opacity = opacity
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.image.isNull():
+            return
+        canvas = QPixmap(self.size())
+        canvas.fill(self.color)
+        image = self.image.scaled(
+            self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        painter = QPainter(canvas)
+        painter.drawPixmap((self.width() - image.width()) // 2, (self.height() - image.height()) // 2, image)
+        painter.end()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 12, 12)
+        painter.setClipPath(clip)
+        painter.setOpacity(self.opacity / 255)
+        painter.drawPixmap(0, 0, canvas)
+
+
 class OnScreenKeyboard(QDialog):
     """Controller-driven text entry.
 
-    D-pad moves over the keys, A types, LB deletes, RB adds a space, B cancels.
-    A physical keyboard also works.
+    D-pad moves over the rounded keys, A types, LB deletes, and RB adds a space.
+    The page key switches between letters and symbols; a physical keyboard also works.
     """
 
     input_failed = pyqtSignal(object)
 
     def __init__(
         self, parent=None, title="Enter text", text="", password=False, theme_color=None,
-        target_field=None, input_device=None,
+        target_field=None, input_device=None, background_color=None, appearance=None,
     ):
         super().__init__(parent)
         theme_color = theme_color or resolve_theme_color(parent)
+        config = appearance if isinstance(appearance, dict) else _keyboard_config(parent)
+        if background_color is None:
+            card_color = _keyboard_color(config, "_keyboard_background_color", "#141414")
+        else:
+            card_color = _keyboard_color({"color": background_color}, "color", "#141414")
+        try:
+            opacity = max(0, min(100, int(config.get("_keyboard_background_opacity", 96))))
+        except (TypeError, ValueError, OverflowError):
+            log_warning("Invalid keyboard background opacity; using 96%.")
+            opacity = 96
+        opacity_alpha = round(opacity * 255 / 100)
+        image_path = config.get("_keyboard_background_image", "")
+        if not isinstance(image_path, str):
+            log_warning("Invalid keyboard background image setting; using background color.")
+            image_path = ""
+        image = QPixmap(image_path) if image_path else QPixmap()
+        if image_path and image.isNull():
+            log_warning(f"Could not load keyboard background image: {image_path}")
+        key_color = _keyboard_color(config, "_keyboard_key_color", "#30343c")
+        special_color = _keyboard_color(config, "_keyboard_special_key_color", "#464c56")
+        key_text_color = _keyboard_color(config, "_keyboard_key_text_color", "#ffffff")
+        title_color = "#FFFFFF" if not image.isNull() else (
+            "#111111" if card_color.lightness() > 128 else "#FFFFFF"
+        )
+        title_background = "rgba(0, 0, 0, 170)" if not image.isNull() else "transparent"
+        card_background = (
+            "transparent" if not image.isNull() else
+            f"rgba({card_color.red()}, {card_color.green()}, {card_color.blue()}, {opacity_alpha})"
+        )
         self.target_field = target_field
         self.input_device = input_device
         self.initial_text = text
@@ -56,16 +154,15 @@ class OnScreenKeyboard(QDialog):
         self.setWindowTitle(title)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setMinimumSize(860, 560)
-        self.resize(860, 560)
+        self.resize(860, 520)
         self.setStyleSheet(f"""
             QWidget#keyboardCard {{
-                background-color: rgba(20, 20, 20, 245);
+                background-color: {card_background};
                 border: 2px solid {theme_color};
                 border-radius: 14px;
             }}
-            QLabel#keyboardTitle {{ color: #FFFFFF; font-size: 22px; font-weight: bold; }}
-            QLabel#keyboardHint {{ color: #888888; font-size: 13px; }}
+            QLabel#keyboardTitle {{ color: {title_color}; background-color: {title_background}; font-size: 22px; font-weight: bold; }}
+            QLabel#keyboardHint {{ color: {title_color}; background-color: {title_background}; font-size: 13px; }}
             QLineEdit {{
                 background-color: rgba(40, 40, 40, 220);
                 color: #FFFFFF;
@@ -75,31 +172,35 @@ class OnScreenKeyboard(QDialog):
                 font-size: 20px;
             }}
             QPushButton {{
-                background-color: rgba(50, 50, 50, 220);
-                color: #FFFFFF;
+                background-color: rgba({key_color.red()}, {key_color.green()}, {key_color.blue()}, 245);
+                color: {key_text_color.name()};
                 border: 2px solid transparent;
-                border-radius: 8px;
-                padding: 10px 0;
+                border-radius: 11px;
+                padding: 6px 0;
                 font-size: 18px;
                 font-weight: bold;
+                min-height: 34px;
             }}
-            QPushButton:checked {{ background-color: {theme_color}; }}
+            QPushButton[keyboardRole="special"] {{ background-color: rgba({special_color.red()}, {special_color.green()}, {special_color.blue()}, 245); }}
+            QPushButton[keyboardRole="page"] {{ background-color: {theme_color}; }}
+            QPushButton[keyboardRole="space"] {{ font-size: 14px; }}
             QPushButton:focus, QPushButton:hover {{ border: 2px solid {theme_color}; }}
             QPushButton[controllerSelected="true"] {{ border: 2px solid {theme_color}; }}
         """)
 
         self.shift = False
         self.non_activating = False
+        self.current_page = "letters"
         self.result_text = text
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        card = QWidget(self)
+        card = KeyboardCard(image, card_color, opacity_alpha, self)
         card.setObjectName("keyboardCard")
         outer.addWidget(card)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(10)
+        layout.setContentsMargins(24, 16, 24, 16)
+        layout.setSpacing(8)
 
         heading = QLabel(title)
         heading.setObjectName("keyboardTitle")
@@ -115,47 +216,104 @@ class OnScreenKeyboard(QDialog):
 
         self.rows = []
         self.key_buttons = []
-        grid = QGridLayout()
-        grid.setSpacing(6)
-        for row_index, row in enumerate(KEY_ROWS):
-            buttons = []
-            for column, key in enumerate(row):
-                button = QPushButton(key)
-                button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                button.clicked.connect(lambda _checked, b=button: self.type_key(b))
-                grid.addWidget(button, row_index, column)
-                buttons.append(button)
-                self.key_buttons.append(button)
-            self.rows.append(buttons)
-        layout.addLayout(grid)
+        self.grid = QGridLayout()
+        self.grid.setSpacing(7)
+        layout.addLayout(self.grid)
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(6)
-        self.shift_button = QPushButton("Shift")
-        self.shift_button.setCheckable(True)
-        self.shift_button.clicked.connect(self.toggle_shift)
-        space_button = QPushButton("Space")
-        space_button.clicked.connect(lambda: self.insert(" "))
-        backspace_button = QPushButton("⌫ Delete")
-        backspace_button.clicked.connect(self.backspace)
-        cancel_button = QPushButton("Close" if input_device is not None else "Cancel")
-        cancel_button.clicked.connect(self.reject)
-        done_button = QPushButton("Done")
-        done_button.clicked.connect(self.finish)
-        action_buttons = [self.shift_button, space_button, backspace_button, cancel_button, done_button]
-        for button in action_buttons:
-            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            action_row.addWidget(button, stretch=2 if button is space_button else 1)
-        layout.addLayout(action_row)
-        self.rows.append(action_buttons)
+        self.cancel_button = QPushButton("Close" if input_device is not None else "Cancel")
+        self.cancel_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.cancel_button.setProperty("keyboardRole", "special")
+        self.cancel_button.clicked.connect(self.reject)
+        layout.addWidget(self.cancel_button, alignment=Qt.AlignmentFlag.AlignRight)
 
         cancel_hint = "close" if input_device is not None else "cancel"
         hint = QLabel(f"D-pad / stick: move    A: type    LB: delete    RB: space    B: {cancel_hint}")
         hint.setObjectName("keyboardHint")
         layout.addWidget(hint)
 
-        self.cursor_row = 1
+        self.cursor_row = 0
         self.cursor_column = 0
+        self._render_page()
+        self._focus_cursor()
+
+    def _render_page(self):
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self.rows = []
+        self.key_buttons = []
+        page_buttons = {"PAGE_SYMBOLS", "PAGE_SYMBOLS_MORE", "PAGE_LETTERS"}
+        special_buttons = {"SHIFT", "BACKSPACE", "ENTER"}
+        spans = {
+            "BACKSPACE": 2, "ENTER": 2, "PAGE_SYMBOLS": 2,
+            "PAGE_SYMBOLS_MORE": 2, "PAGE_LETTERS": 2, "SPACE": 4,
+        }
+        for row_index, tokens in enumerate(KEYBOARD_PAGES[self.current_page]):
+            row_buttons = []
+            column = 0
+            for token in tokens:
+                button = QPushButton(self._key_caption(token))
+                button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                button.setProperty("keyToken", token)
+                if token in page_buttons:
+                    role = "page"
+                elif token in special_buttons or token == "SPACE":
+                    role = "special" if token != "SPACE" else "space"
+                else:
+                    role = "character"
+                    self.key_buttons.append(button)
+                button.setProperty("keyboardRole", role)
+                button.clicked.connect(
+                    lambda _checked=False, key=token: self._activate_key(key)
+                )
+                span = spans.get(token, 1)
+                self.grid.addWidget(button, row_index, column, 1, span)
+                column += span
+                row_buttons.append(button)
+            self.rows.append(row_buttons)
+        self.rows.append([self.cancel_button])
+
+    def _key_caption(self, token):
+        captions = {
+            "SHIFT": "⇧",
+            "BACKSPACE": "⌫",
+            "SPACE": "Space",
+            "ENTER": "Done",
+            "PAGE_SYMBOLS": "?123",
+            "PAGE_SYMBOLS_MORE": "=\\<",
+            "PAGE_LETTERS": "ABC",
+        }
+        return captions.get(token, self._key_text(token))
+
+    def _activate_key(self, token):
+        if token == "SHIFT":
+            self.toggle_shift()
+        elif token == "BACKSPACE":
+            self.backspace()
+        elif token == "SPACE":
+            self.insert(" ")
+        elif token == "ENTER":
+            self.finish()
+        elif token == "PAGE_SYMBOLS":
+            self.set_page("symbols")
+        elif token == "PAGE_SYMBOLS_MORE":
+            self.set_page("symbols_more")
+        elif token == "PAGE_LETTERS":
+            self.set_page("letters")
+        else:
+            self.insert(self._key_text(token))
+            if self.shift and self.current_page == "letters":
+                self.toggle_shift()
+
+    def set_page(self, page):
+        if page not in KEYBOARD_PAGES or page == self.current_page:
+            return
+        self.current_page = page
+        self.shift = False
+        self.cursor_row = 0
+        self.cursor_column = 0
+        self._render_page()
         self._focus_cursor()
 
     def _focus_cursor(self):
@@ -183,6 +341,41 @@ class OnScreenKeyboard(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self._focus_cursor()
         self.show()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.target_field is None and self.input_device is None:
+            return
+
+        target_rect = None
+        if self.target_field is not None:
+            target_rect = QRect(
+                self.target_field.mapToGlobal(self.target_field.rect().topLeft()),
+                self.target_field.size(),
+            )
+            screen = QApplication.screenAt(target_rect.center())
+        else:
+            screen = QApplication.screenAt(QCursor.pos())
+        screen = screen or self.screen()
+        if screen is None:
+            return
+
+        available = screen.availableGeometry()
+        width = min(860, available.width())
+        height = min(520, available.height())
+        place_above = False
+        if target_rect is not None and available.intersects(target_rect):
+            above = max(0, target_rect.top() - available.top())
+            below = max(0, available.bottom() - target_rect.bottom())
+            place_above = above > below
+            space = above if place_above else below
+            if space >= self.layout().minimumSize().height():
+                height = min(height, space)
+
+        self.resize(width, height)
+        x = available.x() + max(0, (available.width() - self.width()) // 2)
+        y = available.top() if place_above else available.bottom() - self.height() + 1
+        self.move(x, y)
 
     def _key_text(self, key):
         if not self.shift:
@@ -225,15 +418,12 @@ class OnScreenKeyboard(QDialog):
         return True
 
     def toggle_shift(self):
-        self.shift = self.shift_button.isChecked()
-        for button, key in zip(self.key_buttons, [key for row in KEY_ROWS for key in row]):
-            button.setText(self._key_text(key))
+        self.shift = not self.shift
+        for button in self.key_buttons:
+            button.setText(self._key_text(button.property("keyToken")))
 
     def type_key(self, button):
-        self.insert(button.text())
-        if self.shift:
-            self.shift_button.setChecked(False)
-            self.toggle_shift()
+        self._activate_key(button.property("keyToken"))
 
     def finish(self):
         self.result_text = self.target_field.text() if self.target_field is not None else self.current_text

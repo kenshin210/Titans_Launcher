@@ -102,11 +102,15 @@ class BrowserController(VirtualKeyboard):
         self.mouse_buttons = {self.ecodes.BTN_LEFT: False, self.ecodes.BTN_RIGHT: False}
         self.mouse_remainder = [0.0, 0.0]
 
-    def handle_pointer(self, x, y, left_trigger, right_trigger):
+    def handle_pointer(self, x, y, left_trigger, right_trigger, sensitivity=18):
+        try:
+            sensitivity = max(1.0, min(40.0, float(sensitivity)))
+        except (TypeError, ValueError):
+            sensitivity = 18.0
         changed = False
         for index, (value, axis) in enumerate(((x, self.ecodes.REL_X), (y, self.ecodes.REL_Y))):
             magnitude = max(0.0, (abs(value) - 0.18) / 0.82)
-            movement = (1 if value >= 0 else -1) * magnitude * magnitude * 18
+            movement = (1 if value >= 0 else -1) * magnitude * magnitude * sensitivity
             self.mouse_remainder[index] += movement
             pixels = int(self.mouse_remainder[index])
             self.mouse_remainder[index] -= pixels

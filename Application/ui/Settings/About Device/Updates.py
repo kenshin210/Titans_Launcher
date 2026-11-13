@@ -7,6 +7,7 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QProcess, QProcessEnvironment, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
 from Application.styles import load_stylesheet
 from Application.ui.Settings.AsyncTask import TaskRunnerMixin, run_command
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
+from Application.core.github_update import GitHubUpdateService, UPDATE_CHANNELS
 from Application.core.privilege_manager import get_privilege_manager
 from Application.core.sudo_cache import get_credential_cache
 
@@ -192,6 +194,9 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         if not hasattr(owner, "_system_update"):
             owner._system_update = SystemUpdate(owner)
         self.update_task = owner._system_update
+        if not hasattr(owner, "_launcher_update_service"):
+            owner._launcher_update_service = GitHubUpdateService(owner, auto_start=False)
+        self.launcher_update_service = owner._launcher_update_service
         theme_color = launcher.get_theme_color() if launcher else "#DC143C"
 
         layout = QVBoxLayout(self)
@@ -203,6 +208,31 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         self.status = QLabel()
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+
+        launcher_update_title = QLabel("Launcher updates")
+        layout.addWidget(launcher_update_title)
+        channel_row = QHBoxLayout()
+        channel_row.addWidget(QLabel("Update channel:"))
+        self.update_channel_combo = QComboBox()
+        self.update_channel_combo.addItems(UPDATE_CHANNELS)
+        self.update_channel_combo.setCurrentText(self.launcher_update_service.branch)
+        self.update_channel_combo.currentTextChanged.connect(self._set_update_channel)
+        channel_row.addWidget(self.update_channel_combo)
+        channel_row.addStretch()
+        layout.addLayout(channel_row)
+        self.launcher_update_status = QLabel()
+        self.launcher_update_status.setWordWrap(True)
+        layout.addWidget(self.launcher_update_status)
+        launcher_actions = QHBoxLayout()
+        self.check_launcher_button = QPushButton("Check GitHub")
+        self.install_launcher_button = QPushButton("Install Launcher Update")
+        for button in (self.check_launcher_button, self.install_launcher_button):
+            button.setObjectName("soundDisplayButton")
+            launcher_actions.addWidget(button)
+        launcher_actions.addStretch()
+        layout.addLayout(launcher_actions)
+        self.check_launcher_button.clicked.connect(self.launcher_update_service.check)
+        self.install_launcher_button.clicked.connect(self.start_launcher_update)
 
         actions = QHBoxLayout()
         self.check_button = QPushButton("Check for Updates")
@@ -244,8 +274,36 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         else:
             self.status.setText("Press Check for Updates to see what is available.")
         self.update_task.changed.connect(self._sync_update)
+        self.launcher_update_service.changed.connect(self._sync_launcher_update)
         if self.update_task.status:
             self._sync_update()
+        self._sync_launcher_update()
+
+    def _set_update_channel(self, branch):
+        try:
+            self.launcher_update_service.set_branch(branch)
+        except (RuntimeError, ValueError) as error:
+            QMessageBox.warning(self, "Launcher Update Channel", str(error))
+            self._sync_launcher_update()
+
+    def start_launcher_update(self):
+        file_check = getattr(self.owner, "_file_check", None)
+        if (
+            self.launcher_update_service.busy
+            or not self.launcher_update_service.available
+            or self.update_task.process is not None
+            or (file_check and file_check.busy)
+        ):
+            return
+        answer = QMessageBox.question(
+            self,
+            "Install launcher update",
+            f"Download and install the launcher files from GitHub "
+            f"{self.launcher_update_service.branch}? "
+            "Your launcher will need to restart to apply the update.",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.launcher_update_service.install()
 
     def check_updates(self):
         file_check = getattr(self.owner, "_file_check", None)
@@ -329,6 +387,20 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
         else:
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(self.update_task.progress)
+        self._sync_launcher_update()
+
+    def _sync_launcher_update(self):
+        self.launcher_update_status.setText(self.launcher_update_service.status)
+        self.update_channel_combo.blockSignals(True)
+        self.update_channel_combo.setCurrentText(self.launcher_update_service.branch)
+        self.update_channel_combo.blockSignals(False)
+        self.update_channel_combo.setEnabled(not self.launcher_update_service.busy)
+        self.check_launcher_button.setEnabled(not self.launcher_update_service.busy)
+        self.install_launcher_button.setEnabled(
+            not self.launcher_update_service.busy
+            and self.launcher_update_service.available
+            and self.update_task.process is None
+        )
 
     def _sync_controls(self):
         file_check = getattr(self.owner, "_file_check", None)
