@@ -28,6 +28,7 @@ PACMAN_PACKAGES=(
     kwin
     libcec
     libkscreen
+    libnotify
     libpulse
     linux
     networkmanager
