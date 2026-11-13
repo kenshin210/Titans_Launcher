@@ -8,6 +8,7 @@
 		"select": ["button:0"],
 		"back": ["button:1"],
 		"previous_tab": ["button:4"],
-		"next_tab": ["button:5"]
+		"next_tab": ["button:5"],
+		"control_centre": []
 	}
 }

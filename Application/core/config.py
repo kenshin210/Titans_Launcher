@@ -22,6 +22,7 @@ DEFAULT_CONTROLLER_BINDINGS = {
     "back": ["button:1"],
     "previous_tab": ["button:4"],
     "next_tab": ["button:5"],
+    "control_centre": [],
     "close_app": ["button:8"],
 }
 
@@ -40,6 +41,7 @@ DEFAULT_CONFIG = {
     "_text_scale": 100,
     "_focus_indicator": "Standard",
     "_control_centre_shortcut": "Ctrl+Shift+Space",
+    "_show_control_centre_button": False,
     "_active_home_profile": "Default",
     "_home_profiles": {"Default": {"order": [], "hidden": []}},
     "_enable_glitch": False,
@@ -141,6 +143,7 @@ def load_config():
             "_large_text": False,
             "_show_focus_indicators": True,
             "_control_centre_shortcut": "Ctrl+Shift+Space",
+            "_show_control_centre_button": False,
             "_active_home_profile": "Default",
             "_home_profiles": {"Default": {"order": [], "hidden": []}},
             "_enable_glitch": False,

@@ -20,7 +20,8 @@ DEFAULT_BINDINGS = {
     "select": ["button:0"],
     "back": ["button:1"],
     "previous_tab": ["button:4"],
-    "next_tab": ["button:5"]
+    "next_tab": ["button:5"],
+    "control_centre": []
 }
 
 
@@ -87,7 +88,8 @@ class ControllerSettingsWidget(QWidget):
 
         action_labels = {
             "previous_tab": "Left Bumper (Previous Tab)",
-            "next_tab": "Right Bumper (Next Tab)"
+            "next_tab": "Right Bumper (Next Tab)",
+            "control_centre": "Control Centre"
         }
         for action in DEFAULT_BINDINGS:
             row = QHBoxLayout()

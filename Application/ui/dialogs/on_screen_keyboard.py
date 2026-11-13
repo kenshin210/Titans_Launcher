@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -37,9 +37,22 @@ class OnScreenKeyboard(QDialog):
     A physical keyboard also works.
     """
 
-    def __init__(self, parent=None, title="Enter text", text="", password=False, theme_color=None):
+    input_failed = pyqtSignal(object)
+
+    def __init__(
+        self, parent=None, title="Enter text", text="", password=False, theme_color=None,
+        target_field=None, input_device=None,
+    ):
         super().__init__(parent)
         theme_color = theme_color or resolve_theme_color(parent)
+        self.target_field = target_field
+        self.input_device = input_device
+        self.initial_text = text
+        self.current_text = text
+        self.input_error = None
+        self._initial_cursor_position = target_field.cursorPosition() if target_field is not None else None
+        self._initial_selection_start = target_field.selectionStart() if target_field is not None else -1
+        self._initial_selection_length = len(target_field.selectedText()) if target_field is not None else 0
         self.setWindowTitle(title)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -92,11 +105,13 @@ class OnScreenKeyboard(QDialog):
         heading.setObjectName("keyboardTitle")
         layout.addWidget(heading)
 
-        self.display = QLineEdit(text)
-        if password:
-            self.display.setEchoMode(QLineEdit.EchoMode.Password)
-        self.display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        layout.addWidget(self.display)
+        self.display = target_field
+        if target_field is None and input_device is None:
+            self.display = QLineEdit(text)
+            if password:
+                self.display.setEchoMode(QLineEdit.EchoMode.Password)
+            self.display.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            layout.addWidget(self.display)
 
         self.rows = []
         self.key_buttons = []
@@ -123,7 +138,7 @@ class OnScreenKeyboard(QDialog):
         space_button.clicked.connect(lambda: self.insert(" "))
         backspace_button = QPushButton("⌫ Delete")
         backspace_button.clicked.connect(self.backspace)
-        cancel_button = QPushButton("Cancel")
+        cancel_button = QPushButton("Close" if input_device is not None else "Cancel")
         cancel_button.clicked.connect(self.reject)
         done_button = QPushButton("Done")
         done_button.clicked.connect(self.finish)
@@ -134,7 +149,8 @@ class OnScreenKeyboard(QDialog):
         layout.addLayout(action_row)
         self.rows.append(action_buttons)
 
-        hint = QLabel("D-pad / stick: move    A: type    LB: delete    RB: space    B: cancel")
+        cancel_hint = "close" if input_device is not None else "cancel"
+        hint = QLabel(f"D-pad / stick: move    A: type    LB: delete    RB: space    B: {cancel_hint}")
         hint.setObjectName("keyboardHint")
         layout.addWidget(hint)
 
@@ -174,10 +190,39 @@ class OnScreenKeyboard(QDialog):
         return SHIFT_SYMBOLS.get(key, key.upper())
 
     def insert(self, text):
-        self.display.setText(self.display.text() + text)
+        if self.input_error is not None:
+            return
+        if self.target_field is not None:
+            self.target_field.insert(text)
+            self.current_text = self.target_field.text()
+        elif self.input_device is not None:
+            if self._send_input(self.input_device.type_text, text):
+                self.current_text += text
+        else:
+            self.display.insert(text)
+            self.current_text = self.display.text()
 
     def backspace(self):
-        self.display.setText(self.display.text()[:-1])
+        if self.input_error is not None:
+            return
+        if self.target_field is not None:
+            self.target_field.backspace()
+            self.current_text = self.target_field.text()
+        elif self.input_device is not None:
+            if self._send_input(self.input_device.backspace):
+                self.current_text = self.current_text[:-1]
+        else:
+            self.display.backspace()
+            self.current_text = self.display.text()
+
+    def _send_input(self, send, *args):
+        try:
+            send(*args)
+        except (OSError, ValueError) as error:
+            self.input_error = error
+            self.input_failed.emit(error)
+            return False
+        return True
 
     def toggle_shift(self):
         self.shift = self.shift_button.isChecked()
@@ -191,8 +236,19 @@ class OnScreenKeyboard(QDialog):
             self.toggle_shift()
 
     def finish(self):
-        self.result_text = self.display.text()
+        self.result_text = self.target_field.text() if self.target_field is not None else self.current_text
         self.accept()
+
+    def reject(self):
+        if self.target_field is not None:
+            self.target_field.setText(self.initial_text)
+            if self._initial_selection_start >= 0:
+                self.target_field.setSelection(
+                    self._initial_selection_start, self._initial_selection_length
+                )
+            elif self._initial_cursor_position is not None:
+                self.target_field.setCursorPosition(self._initial_cursor_position)
+        super().reject()
 
     def handle_controller_action(self, action):
         if action == "back":
@@ -229,9 +285,9 @@ class OnScreenKeyboard(QDialog):
             super().keyPressEvent(event)
 
     @staticmethod
-    def get_text(parent=None, title="Enter text", text="", password=False):
+    def get_text(parent=None, title="Enter text", text="", password=False, target_field=None):
         """Returns (text, accepted), like QInputDialog.getText."""
-        dialog = OnScreenKeyboard(parent, title, text, password)
+        dialog = OnScreenKeyboard(parent, title, text, password, target_field=target_field)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             return dialog.result_text, True
         return text, False

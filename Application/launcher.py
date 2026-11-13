@@ -50,6 +50,7 @@ from .core.controller import (
     load_controller_bindings,
     map_raw_input,
 )
+from .core.global_shortcut import GlobalShortcutListener
 from .core.browser_controller import BrowserController, VirtualKeyboard
 from .core.proxy import proxy_environment
 from .core.sound import NavigationSoundPlayer
@@ -119,6 +120,15 @@ class MainApp(QWidget, TaskRunnerMixin):
         )
         self._control_centre_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         self._control_centre_shortcut.activated.connect(self.show_control_centre)
+        self.setup_on_screen_keyboard_shortcut()
+        self.global_shortcut_listener = GlobalShortcutListener(
+            self.config.get("_control_centre_shortcut", "Ctrl+Shift+Space"),
+            self,
+        )
+        self.global_shortcut_listener.shortcut_activated.connect(
+            self.show_control_centre_from_global_shortcut
+        )
+        self.global_shortcut_listener.start()
         self.apply_accessibility_settings()
         self.session_manager = SessionManager()
         self.session_manager.update_heartbeat()
@@ -172,6 +182,11 @@ class MainApp(QWidget, TaskRunnerMixin):
                 except OSError as error:
                     self.disable_browser_controller(error)
             return
+        if action == "control_centre":
+            active_modal = QApplication.activeModalWidget()
+            if active_modal is None or active_modal is getattr(self, "control_centre_overlay", None):
+                self.show_control_centre()
+            return
         if action == "back" and time.monotonic() < self.controller_back_suppressed_until:
             return
         if self.handle_power_menu_input(action):
@@ -223,6 +238,20 @@ class MainApp(QWidget, TaskRunnerMixin):
             except OSError as error:
                 self.disable_browser_controller(error)
 
+    def setup_on_screen_keyboard_shortcut(self):
+        self._on_screen_keyboard_shortcut = QShortcut(QKeySequence("Ctrl+Alt+K"), self)
+        self._on_screen_keyboard_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._on_screen_keyboard_shortcut.activated.connect(self.toggle_shortcut_keyboard)
+        self.global_keyboard_shortcut_listener = GlobalShortcutListener("Ctrl+Alt+K", self)
+        self.global_keyboard_shortcut_listener.shortcut_activated.connect(
+            self.toggle_keyboard_from_global_shortcut
+        )
+        self.global_keyboard_shortcut_listener.start()
+
+    def toggle_keyboard_from_global_shortcut(self):
+        if QApplication.applicationState() != Qt.ApplicationState.ApplicationActive:
+            self.toggle_shortcut_keyboard()
+
     def toggle_shortcut_keyboard(self):
         if self.controller_capture_active:
             return
@@ -248,47 +277,50 @@ class MainApp(QWidget, TaskRunnerMixin):
                         f"External text entry requires python-evdev and write access to /dev/uinput:\n{error}",
                     )
                     return
-            dialog = OnScreenKeyboard(None, "Type in active application", theme_color=self.get_theme_color())
+            dialog = OnScreenKeyboard(
+                None, "Type in active application", theme_color=self.get_theme_color(),
+                input_device=device,
+            )
         else:
             if field is None:
-                self.show_error_overlay("On-screen Keyboard", "Select a text field first, then press Xbox + B.")
+                self.show_error_overlay(
+                    "On-screen Keyboard",
+                    "Select a text field first, then press Ctrl+Alt+K or Xbox + B.",
+                )
                 return
             dialog = OnScreenKeyboard(
                 field.window(), field.placeholderText() or "Enter text", field.text(),
-                field.echoMode() != QLineEdit.EchoMode.Normal, theme_color=self.get_theme_color()
+                field.echoMode() != QLineEdit.EchoMode.Normal, theme_color=self.get_theme_color(),
+                target_field=field,
             )
         self.shortcut_keyboard = dialog
+        dialog.input_failed.connect(
+            lambda error: self.handle_shortcut_keyboard_input_failure(dialog, device, error)
+        )
         dialog.finished.connect(
-            lambda result: self.finish_shortcut_keyboard(dialog, result, field, device, owned_device)
+            lambda _result: self.finish_shortcut_keyboard(dialog, device, owned_device)
         )
         if external:
             dialog.show_without_focus()
         else:
             dialog.open()
 
-    def finish_shortcut_keyboard(self, dialog, result, field, device, owned_device):
+    def finish_shortcut_keyboard(self, dialog, device, owned_device):
         if self.shortcut_keyboard is not dialog:
             return
         self.shortcut_keyboard = None
-        try:
-            if result == QDialog.DialogCode.Accepted and device is not None:
-                try:
-                    device.type_text(dialog.result_text)
-                except ValueError as error:
-                    log_error(f"External keyboard input failed: {error}")
-                    self.show_shortcut_keyboard_error(str(error))
-                except OSError as error:
-                    if device is self.browser_controller:
-                        self.disable_browser_controller(error)
-                    else:
-                        log_error(f"External keyboard input failed: {error}")
-                        self.show_shortcut_keyboard_error(str(error))
-            elif result == QDialog.DialogCode.Accepted and field is not None and not sip.isdeleted(field):
-                field.setText(dialog.result_text)
-        finally:
-            if owned_device:
-                device.close()
-            dialog.deleteLater()
+        if owned_device:
+            device.close()
+        dialog.deleteLater()
+
+    def handle_shortcut_keyboard_input_failure(self, dialog, device, error):
+        if self.shortcut_keyboard is dialog:
+            dialog.reject()
+        if isinstance(error, OSError) and device is self.browser_controller:
+            self.disable_browser_controller(error)
+        else:
+            log_error(f"External keyboard input failed: {error}")
+            self.show_shortcut_keyboard_error(str(error))
 
     def show_shortcut_keyboard_error(self, message):
         dialog = ThemedMessageBox(None, title="On-screen Keyboard", message=message, theme_color=self.get_theme_color())
@@ -549,6 +581,9 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.control_centre_btn.setObjectName("launcherSettingsButton")
         self.update_settings_button_style()
         self.control_centre_btn.clicked.connect(self.show_control_centre)
+        self.control_centre_btn.setVisible(
+            self.config.get("_show_control_centre_button", False)
+        )
         bottom_layout.addWidget(
             self.control_centre_btn,
             alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
@@ -631,6 +666,22 @@ class MainApp(QWidget, TaskRunnerMixin):
             )
             event.ignore()
             return
+
+        for listener_name in ("global_shortcut_listener", "global_keyboard_shortcut_listener"):
+            listener = getattr(self, listener_name, None)
+            if listener is not None and listener.isRunning():
+                listener.stop()
+                if not listener.wait(3000):
+                    log_warning(
+                        "Global keyboard shortcut listener did not stop within timeout."
+                    )
+                    self.show_error_overlay(
+                        "Keyboard Shortcut Still Stopping",
+                        "The global keyboard shortcut is still shutting down. "
+                        "Wait a moment, then close the launcher again.",
+                    )
+                    event.ignore()
+                    return
 
         controller_thread = getattr(self, "controller_thread", None)
         if controller_thread is not None and controller_thread.isRunning():
@@ -812,6 +863,18 @@ class MainApp(QWidget, TaskRunnerMixin):
         shortcut = getattr(self, "_control_centre_shortcut", None)
         if shortcut is not None:
             shortcut.setKey(QKeySequence(sequence))
+        listener = getattr(self, "global_shortcut_listener", None)
+        if listener is not None:
+            listener.set_shortcut(sequence)
+
+    def show_control_centre_from_global_shortcut(self):
+        overlay = getattr(self, "control_centre_overlay", None)
+        overlay_is_open = overlay is not None and overlay.isVisible()
+        if (
+            QApplication.applicationState() != Qt.ApplicationState.ApplicationActive
+            or overlay_is_open
+        ):
+            self.show_control_centre()
 
     def show_control_centre(self):
         overlay = getattr(self, "control_centre_overlay", None)
@@ -861,6 +924,10 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def apply_accessibility_settings(self):
         self.apply_button_style()
+        if hasattr(self, "control_centre_btn"):
+            self.control_centre_btn.setVisible(
+                self.config.get("_show_control_centre_button", False)
+            )
         app = QApplication.instance()
         if app is None:
             return

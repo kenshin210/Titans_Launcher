@@ -14,6 +14,7 @@ from Application.ui.dialogs.file_picker import ControllerFileDialog
 from Application.core.config import DEFAULT_VIDEO_PATH
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
 from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
+from Application.ui.Settings.ControlCentreShortcutWidget import ControlCentreShortcutWidget
 from Application.ui.Settings.SoundDisplaySettings import SoundDisplaySettingsWidget
 from Application.ui.Settings.NetworkSettings import NetworkSettingsWidget
 from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
@@ -292,6 +293,7 @@ class BasicSettingsWidget(QWidget):
         desc = QLabel("Configure basic launcher behavior or switch to the Advanced Menu using the sidebar control.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
+        layout.addWidget(ControlCentreShortcutWidget(self.launcher))
         layout.addWidget(NavigationSoundCard(self.launcher))
         layout.addStretch()
         return card

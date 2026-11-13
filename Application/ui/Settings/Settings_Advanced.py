@@ -28,6 +28,7 @@ from Application.ui.Settings.Logger import (
     log_warning,
 )
 from Application.ui.Settings.ControllerSettings import ControllerSettingsWidget
+from Application.ui.Settings.ControlCentreShortcutWidget import ControlCentreShortcutWidget
 from Application.ui.Settings.SoundDisplaySettings import SoundDisplaySettingsWidget
 from Application.ui.Settings.NetworkSettings import NetworkSettingsWidget
 from Application.ui.Settings.NavigationSoundSettings import NavigationSoundCard
@@ -366,6 +367,7 @@ class AdvancedSettingsWidget(QWidget):
         desc = QLabel("Advanced mode is enabled. Use the sidebar button to switch back to the Basic Menu.")
         desc.setStyleSheet("color: #888888; font-size: 14px; border: none;")
         layout.addWidget(desc)
+        layout.addWidget(ControlCentreShortcutWidget(self.launcher))
         layout.addWidget(NavigationSoundCard(self.launcher))
         layout.addStretch()
         return card

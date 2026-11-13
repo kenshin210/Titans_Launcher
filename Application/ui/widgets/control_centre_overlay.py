@@ -40,34 +40,7 @@ class ControlCentreOverlay(QDialog, TaskRunnerMixin):
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
-        self.setStyleSheet("""
-            QDialog#controlCentreOverlay { background: rgba(0, 0, 0, 205); }
-            QFrame#controlCentreCard {
-                background: #171717; color: #ffffff;
-                border: 2px solid #555555; border-radius: 18px;
-            }
-            QLabel { color: #ffffff; }
-            QLabel#controlCentreTitle { font-size: 26px; font-weight: bold; }
-            QLabel#controlCentreStatus { color: #dddddd; font-size: 15px; }
-            QPushButton, QCheckBox {
-                background: #292929; color: #ffffff; padding: 10px 16px;
-                border: 2px solid #666666; border-radius: 8px; font-size: 16px;
-            }
-            QPushButton:focus, QCheckBox:focus, QSlider:focus {
-                border: 3px solid #ffe066;
-            }
-            QPushButton:checked { background: #244b3a; border-color: #57d69a; }
-            QPushButton:disabled, QCheckBox:disabled, QSlider:disabled {
-                color: #888888;
-            }
-            QSlider::groove:horizontal {
-                height: 8px; background: #4a4a4a; border-radius: 4px;
-            }
-            QSlider::handle:horizontal {
-                width: 20px; margin: -7px 0; border-radius: 10px;
-                background: #ffe066;
-            }
-        """)
+        self.apply_theme()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(30, 30, 30, 30)
@@ -140,6 +113,57 @@ class ControlCentreOverlay(QDialog, TaskRunnerMixin):
         self.refresh_timer.start(10_000)
         self.finished.connect(lambda _result: self.refresh_timer.stop())
         self.refresh_status()
+
+    def apply_theme(self):
+        config = getattr(self.launcher, "config", {})
+        accent = getattr(self.launcher, "get_theme_color", lambda: "#DC143C")()
+        high_contrast = config.get("_high_contrast", False)
+        surface = "#000000" if high_contrast else "rgba(22, 22, 22, 240)"
+        control_surface = "#101010" if high_contrast else "rgba(35, 35, 35, 180)"
+        text_color = "#FFFFFF"
+        muted_color = "#FFFFFF" if high_contrast else "#DDDDDD"
+        focus_color = "#FFFF00" if high_contrast else accent
+        border_color = "#FFFFFF" if high_contrast else "rgba(255, 255, 255, 30)"
+        self.setStyleSheet(
+            f"""
+            QDialog#controlCentreOverlay {{ background: rgba(0, 0, 0, 205); }}
+            QWidget#controlCentreCard {{
+                background-color: {surface}; color: {text_color};
+                border: 2px solid {accent}; border-radius: 14px;
+            }}
+            QLabel {{ color: {text_color}; }}
+            QLabel#controlCentreTitle {{ font-size: 26px; font-weight: bold; }}
+            QLabel#controlCentreStatus {{ color: {muted_color}; font-size: 15px; }}
+            QPushButton, QCheckBox {{
+                background-color: {control_surface}; color: {text_color};
+                padding: 10px 16px; border: 2px solid {border_color};
+                border-radius: 8px; font-size: 16px;
+            }}
+            QPushButton:hover, QPushButton:focus, QCheckBox:focus, QSlider:focus {{
+                border: 3px solid {focus_color};
+            }}
+            QPushButton:checked {{
+                background-color: {accent}; border-color: {accent}; color: #FFFFFF;
+            }}
+            QPushButton:disabled, QCheckBox:disabled, QSlider:disabled {{
+                color: {muted_color};
+            }}
+            QCheckBox::indicator {{
+                width: 20px; height: 20px; border: 2px solid {border_color};
+                border-radius: 4px; background: {control_surface};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {accent}; border-color: {accent};
+            }}
+            QSlider::groove:horizontal {{
+                height: 8px; background: {control_surface}; border-radius: 4px;
+            }}
+            QSlider::handle:horizontal {{
+                width: 20px; margin: -7px 0; border-radius: 10px;
+                background-color: {accent};
+            }}
+            """
+        )
 
     @staticmethod
     def _slider():

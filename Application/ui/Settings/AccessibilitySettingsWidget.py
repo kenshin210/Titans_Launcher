@@ -1,12 +1,10 @@
-"""Accessibility and quick-settings shortcut preferences."""
+"""Accessibility preferences."""
 
-from PyQt6.QtGui import QKeySequence
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
     QLabel,
-    QKeySequenceEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -21,7 +19,7 @@ from Application.ui.Settings.Logger import log_info
 
 
 class AccessibilitySettingsWidget(QWidget):
-    """Configure visual accessibility and the Control Centre shortcut."""
+    """Configure visual accessibility preferences."""
 
     def __init__(self, launcher):
         super().__init__()
@@ -33,10 +31,7 @@ class AccessibilitySettingsWidget(QWidget):
         title = QLabel("Accessibility")
         title.setStyleSheet("font-size: 24px; font-weight: bold;")
         layout.addWidget(title)
-        description = QLabel(
-            "Adjust visibility and motion preferences. The Control Centre shortcut "
-            "works while Titans is the active application."
-        )
+        description = QLabel("Adjust visibility and motion preferences.")
         description.setWordWrap(True)
         layout.addWidget(description)
 
@@ -47,6 +42,14 @@ class AccessibilitySettingsWidget(QWidget):
         self.reduce_motion_checkbox = QCheckBox("Reduce motion and disable transitions")
         self.reduce_motion_checkbox.setChecked(launcher.config.get("_reduce_motion", False))
         layout.addWidget(self.reduce_motion_checkbox)
+
+        self.control_centre_checkbox = QCheckBox(
+            "Show the Control Centre button on the main screen"
+        )
+        self.control_centre_checkbox.setChecked(
+            launcher.config.get("_show_control_centre_button", False)
+        )
+        layout.addWidget(self.control_centre_checkbox)
 
         form = QFormLayout()
         self.focus_combo = QComboBox()
@@ -73,10 +76,6 @@ class AccessibilitySettingsWidget(QWidget):
         )
         form.addRow("Color-vision-friendly accent:", self.palette_combo)
 
-        self.shortcut_edit = QKeySequenceEdit(
-            QKeySequence(launcher.config.get("_control_centre_shortcut", "Ctrl+Shift+Space"))
-        )
-        form.addRow("Control Centre shortcut:", self.shortcut_edit)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         for combo in (self.focus_combo, self.text_scale_combo, self.palette_combo):
             combo.setMinimumWidth(240)
@@ -101,12 +100,12 @@ class AccessibilitySettingsWidget(QWidget):
         for checkbox in (
             self.contrast_checkbox,
             self.reduce_motion_checkbox,
+            self.control_centre_checkbox,
         ):
             checkbox.toggled.connect(self.save_preferences)
         self.palette_combo.currentTextChanged.connect(self.save_preferences)
         self.focus_combo.currentIndexChanged.connect(self.save_preferences)
         self.text_scale_combo.currentIndexChanged.connect(self.save_preferences)
-        self.shortcut_edit.keySequenceChanged.connect(self.save_shortcut)
 
     def save_preferences(self, *_args):
         mode = self.focus_combo.currentText()
@@ -117,6 +116,9 @@ class AccessibilitySettingsWidget(QWidget):
         self.launcher.config["_text_scale"] = percent
         self.launcher.config["_large_text"] = percent > 100
         self.launcher.config["_reduce_motion"] = self.reduce_motion_checkbox.isChecked()
+        self.launcher.config["_show_control_centre_button"] = (
+            self.control_centre_checkbox.isChecked()
+        )
         palette = self.palette_combo.currentText()
         if palette == "Standard":
             current = self.launcher.config.get("_theme", "Crimson Red")
@@ -128,10 +130,3 @@ class AccessibilitySettingsWidget(QWidget):
         self.launcher.apply_accessibility_settings()
         self.launcher.refresh_applications_view()
         log_info("Saved accessibility preferences")
-
-    def save_shortcut(self, sequence):
-        shortcut = sequence.toString(QKeySequence.SequenceFormat.PortableText)
-        self.launcher.config["_control_centre_shortcut"] = shortcut
-        self.launcher.save_config_file()
-        self.launcher.update_control_centre_shortcut(shortcut)
-        log_info(f"Updated Control Centre shortcut: {shortcut or 'disabled'}")
