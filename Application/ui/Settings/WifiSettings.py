@@ -19,7 +19,6 @@ from PyQt6.QtCore import Qt
 from Application.styles import load_stylesheet
 from Application.ui.Settings.AsyncTask import TaskRunnerMixin, command_error, run_command
 from Application.ui.Settings.Logger import log_info, log_warning
-from Application.ui.Settings.PhoneWifiSetup import PhoneWifiDialog
 
 
 def split_terse(line):
@@ -198,6 +197,20 @@ class WifiSettingsWidget(QWidget, TaskRunnerMixin):
             return
         if getattr(self.launcher, "_phone_wifi_in_progress", False):
             self.status.setText("Phone setup is still running or stopping.")
+            return
+        try:
+            from Application.ui.Settings.PhoneWifiSetup import PhoneWifiDialog
+        except ModuleNotFoundError as error:
+            if error.name not in {"qrcode", "dbus_next"}:
+                raise
+            log_warning(f"Phone Wi-Fi setup unavailable: missing {error.name}.")
+            QMessageBox.warning(
+                self, "Phone Wi-Fi Setup Unavailable",
+                "Phone setup requires the qrcode and dbus-next Python packages. "
+                "Install them in the Python environment used to launch Titans, or rerun "
+                "the Arch launcher dependency installer and start Titans with "
+                ".venv/bin/python launcher.py.",
+            )
             return
         self._phone_dialog = PhoneWifiDialog(
             self.launcher, self.wifi_devices, self.nmcli, self.refresh_all, self,

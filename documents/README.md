@@ -134,6 +134,15 @@ After installation, start Titans with:
 .venv/bin/python launcher.py
 ```
 
+If phone Wi-Fi setup reports missing Python packages after updating an existing
+installation, rerun the launcher dependency installer, then start with the
+virtual environment command above. To install just those packages into an
+existing launcher virtual environment, run:
+
+```sh
+.venv/bin/python -m pip install qrcode dbus-next
+```
+
 If the kernel was updated while `uinput` was unavailable, reboot into the new
 kernel and rerun the installer.
 
