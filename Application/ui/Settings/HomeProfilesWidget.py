@@ -3,6 +3,7 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -10,6 +11,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -50,6 +52,38 @@ class HomeProfilesWidget(QWidget):
         profile_row.addWidget(self.profile_combo, stretch=1)
         layout.addLayout(profile_row)
 
+        page_row = QHBoxLayout()
+        self.pages_enabled = QCheckBox("Split Home into pages")
+        self.pages_enabled.setChecked(launcher.config.get("_home_pages_enabled", True))
+        page_row.addWidget(self.pages_enabled)
+        page_row.addWidget(QLabel("Apps per page:"))
+        self.page_size = QSpinBox()
+        self.page_size.setRange(1, 30)
+        size = launcher.config.get("_home_page_size", 6)
+        self.page_size.setValue(size if isinstance(size, int) and not isinstance(size, bool) else 6)
+        page_row.addWidget(self.page_size)
+        self.page_animation = QCheckBox("Animate page transitions")
+        self.page_animation.setChecked(launcher.config.get("_home_page_animation", True))
+        page_row.addWidget(self.page_animation)
+        page_row.addWidget(QLabel("Duration (ms):"))
+        self.page_duration = QSpinBox()
+        self.page_duration.setRange(100, 1000)
+        self.page_duration.setSingleStep(50)
+        duration = launcher.config.get("_home_page_animation_ms", 220)
+        self.page_duration.setValue(duration if isinstance(duration, int) and not isinstance(duration, bool) else 220)
+        page_row.addWidget(self.page_duration)
+        layout.addLayout(page_row)
+        hint = QLabel("Move left or right past the last app to change pages. Bumpers switch tabs.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.pages_enabled.toggled.connect(self._save_page_settings)
+        self.page_size.valueChanged.connect(self._save_page_settings)
+        self.page_animation.toggled.connect(self._save_page_settings)
+        self.page_duration.valueChanged.connect(self._save_page_settings)
+        self.page_size.setEnabled(self.pages_enabled.isChecked())
+        self.page_animation.setEnabled(self.pages_enabled.isChecked())
+        self.page_duration.setEnabled(self.pages_enabled.isChecked() and self.page_animation.isChecked())
+
         self.application_list = QListWidget()
         self.application_list.setDragDropMode(
             QListWidget.DragDropMode.InternalMove
@@ -75,6 +109,17 @@ class HomeProfilesWidget(QWidget):
         self.delete_button.clicked.connect(self.delete_profile)
         self._load_profile(self.profile_combo.currentText())
         self.profile_combo.currentTextChanged.connect(self._select_profile)
+
+    def _save_page_settings(self):
+        self.launcher.config["_home_pages_enabled"] = self.pages_enabled.isChecked()
+        self.launcher.config["_home_page_size"] = self.page_size.value()
+        self.launcher.config["_home_page_animation"] = self.page_animation.isChecked()
+        self.launcher.config["_home_page_animation_ms"] = self.page_duration.value()
+        self.page_size.setEnabled(self.pages_enabled.isChecked())
+        self.page_animation.setEnabled(self.pages_enabled.isChecked())
+        self.page_duration.setEnabled(self.pages_enabled.isChecked() and self.page_animation.isChecked())
+        self.launcher.save_config_file()
+        self.launcher.refresh_applications_view()
 
     def _select_profile(self, name):
         if name in self.profiles:

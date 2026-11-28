@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, pyqtSignal
 
 from Application.core.config import PROJECT_ROOT
 from Application.core.file_check import (
@@ -195,6 +195,12 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         self.status = "GitHub update check has not run yet."
         self.remote_info = None
         self.current_version = self._read_installed_version()
+        self._version_watcher = QFileSystemWatcher(self)
+        if self.root.is_dir():
+            self._version_watcher.addPath(str(self.root))
+        self._watch_version_file()
+        self._version_watcher.fileChanged.connect(self._refresh_installed_version)
+        self._version_watcher.directoryChanged.connect(self._refresh_installed_version)
         try:
             self._runtime_manifest = make_manifest(self.root)
         except OSError as error:
@@ -213,6 +219,18 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         except (OSError, ValueError) as error:
             log_warning(f"Installed launcher version is unavailable: {error}")
             return None
+
+    def _watch_version_file(self):
+        path = str(self.root / "VERSION")
+        if os.path.isfile(path) and path not in self._version_watcher.files():
+            self._version_watcher.addPath(path)
+
+    def _refresh_installed_version(self, _path):
+        self._watch_version_file()
+        version = self._read_installed_version()
+        if version != self.current_version:
+            self.current_version = version
+            self.changed.emit()
 
     @property
     def channel(self):

@@ -1,6 +1,6 @@
 # Titans Launcher
 
-**Current version:** `0.02 alpha`
+**Current version:** see [`VERSION`](../VERSION).
 
 Titans Launcher is a console-style Linux launcher built with PyQt6. Its main
 window is borderless and maximized rather than using true fullscreen mode.
@@ -15,12 +15,36 @@ and Windows and macOS are not supported.
 
 - Launch desktop programs and website shortcuts from a customizable Home screen.
 - Organize Home shortcuts into profiles and change their order or visibility.
+- Automatically split Home shortcuts into pages. Configure the page size,
+  animation and duration under **Settings > Home Screen**; disable paging there
+  to keep all shortcuts on one screen. Moving past the first or last tile
+  switches pages and wraps around.
 - Track launched applications from the **Running Apps** view.
 - Navigate the launcher with an SDL-compatible controller.
 - Control Firefox website shortcuts with a built-in controller bridge.
 - Open an on-screen keyboard for use inside and outside Titans.
 - Show weather, Wi-Fi status, and a selected Bluetooth controller or device
   battery on the Home screen.
+- Show the installed launcher version below the Home screen date and time.
+- Show the signed-in Linux account name at the top of the Home screen.
+- Configure an optional idle screensaver under **Settings > General > Screensaver**.
+  Add local images, GIFs or videos and choose the idle and rotation intervals.
+  Keyboard, mouse or controller input dismisses it; it runs only while Titans is active.
+- Under **Settings > General > Cast**, select an external Cast-enabled receiver.
+  Its name and receiver status appear next to the controller battery. Titans
+  does not itself act as a Chromecast or stream media to the receiver.
+- **Advanced Settings > Users** can create a standard Linux user through
+  AccountsService. Administrator authorization and a password are required.
+  If password setup fails after creation, use system account settings to finish
+  or remove the account.
+- **Settings > Network > Wi-Fi > Set Up with Phone** starts a temporary WPA2
+  hotspot after confirmation. Scan the first QR to join it, then scan the
+  second to open the setup page and enter the target Wi-Fi details. Setup
+  expires after five minutes and may interrupt the selected adapter's current
+  connection. The page uses HTTP over the hotspot: only share its hotspot and
+  page codes with trusted people. Other internet connections may be shared with
+  hotspot clients. NetworkManager, `dnsmasq`, and a WPA2 access-point-capable
+  Wi-Fi adapter are required.
 - Open a Control Centre for quick Wi-Fi, Bluetooth, volume, and brightness
   controls.
 - Manage Wi-Fi, Bluetooth, sound, displays, VPN connections, and proxy settings.
@@ -83,6 +107,7 @@ passwordless pacman access.
 The installer also:
 
 - Creates `.venv` in the project folder.
+- Verifies the launcher's Python modules can be imported after installation.
 - Installs Firefox, AntiMicroX, NetworkManager tools, audio/display helpers, and
   other runtime dependencies.
 - Loads the Linux `uinput` module.
@@ -124,6 +149,9 @@ opencv-python
 pygame-ce
 psutil
 evdev
+PyChromecast
+dbus-next
+qrcode
 ```
 
 Equivalent system packages from
@@ -211,7 +239,7 @@ application and return to Titans when that option is enabled for the shortcut.
   keyboard.
 - Press **Ctrl+Alt+K** for the keyboard shortcut while Titans is running.
 - D-pad or left stick moves between keys.
-- A selects, LB deletes, and RB inserts a space.
+- A selects, X or LB deletes, and RB inserts a space.
 - B cancels or closes the keyboard.
 
 External typing requires `evdev`, access to keyboard event devices, and write
@@ -362,8 +390,9 @@ behavior.
 - Hardware readings depend on what the Linux system exposes.
 - Bluetooth battery information depends on Linux or BlueZ reporting it.
 - Session switching depends on logind and a supported display-manager greeter.
-- Titans does not create user accounts, install services, change global
-  display-manager files, or configure a desktop session automatically.
+- Titans does not install services, change global display-manager files, or
+  configure a desktop session automatically. Creating a standard user requires
+  administrator authorization.
 - System power actions are explicit and require confirmation. Titans does not
   change power profiles, suspend automatically, or hibernate automatically.
 - There is no achievement system, screenshot library, voice assistant, activity

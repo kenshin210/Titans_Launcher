@@ -85,11 +85,14 @@ from .ui.widgets.wifi_indicator import WiFiIndicator
 from .ui.widgets.app_switcher import AppSwitcherWidget
 from .core.privilege_manager import get_privilege_manager
 from .core.sudo_cache import get_credential_cache
-from .core.home_profiles import application_names, normalize_home_profiles, ordered_home_applications
+from .core.home_profiles import home_application_pages, normalize_home_profiles
+from .core.user_manager import current_user_display_name
+from .core.cast_devices import scan_cast_devices
 from .core import button_style, corner_style
 from .core.accessibility import text_scale_percent
 from .ui.Settings.controller_focus import SettingsFocusOverlay
 from .ui.widgets.control_centre_overlay import ControlCentreOverlay
+from .ui.widgets.screensaver import Screensaver
 
 class MainApp(QWidget, TaskRunnerMixin):
     app_finished_signal = pyqtSignal()
@@ -99,6 +102,9 @@ class MainApp(QWidget, TaskRunnerMixin):
         super().__init__()
         log_info("Starting Titans HTPC Launcher...")
         self.config = load_config()
+        self._home_page_index = 0
+        self._home_page_slide_group = None
+        self._home_page_slide_overlay = None
         self.app_manager = ApplicationManager()
         self._launcher_update_service = GitHubUpdateService(self)
         self._launcher_update_service.installed.connect(self.offer_restart_after_update)
@@ -139,6 +145,13 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.apply_button_style()
         corner_style.set_corner_style(self.config.get("_corner_style", corner_style.ROUNDED))
         self.initUI()
+        self.screensaver = Screensaver(self)
+        self._cast_scan_in_progress = False
+        self._cast_pending_refresh = False
+        self._cast_timer = QTimer(self)
+        self._cast_timer.timeout.connect(self.refresh_cast_status)
+        self._cast_timer.start(60000)
+        self.refresh_cast_status()
         self._control_centre_shortcut = QShortcut(
             QKeySequence(self.config.get("_control_centre_shortcut", "Ctrl+Shift+Space")),
             self,
@@ -166,7 +179,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         if PYGAME_AVAILABLE:
             self.controller_thread = PygameControllerThread(self)
             self.controller_thread.initialized.connect(self.controller_initialized)
-            self.controller_thread.raw_input.connect(self.handle_controller_input)
+            self.controller_thread.controller_input.connect(self.handle_mapped_controller_input)
             self.controller_thread.button_pressed.connect(self.handle_controller_button_pressed)
             self.controller_thread.button_released.connect(self.handle_controller_button_released)
             self.controller_thread.controller_removed.connect(self.handle_controller_removed)
@@ -180,6 +193,41 @@ class MainApp(QWidget, TaskRunnerMixin):
     def controller_initialized(self):
         self._startup_controller_ready = True
         self.startup_ready.emit()
+
+    def refresh_cast_status(self):
+        identifier = self.config.get("_cast_device_id", "")
+        if not isinstance(identifier, str) or not identifier:
+            self.cast_status_label.hide()
+            return
+        if self._cast_scan_in_progress:
+            self._cast_pending_refresh = True
+            return
+        self._cast_scan_in_progress = True
+        self.cast_status_label.setText("Cast: checking...")
+        self.cast_status_label.show()
+        self.run_async(lambda: scan_cast_devices(identifier), lambda result: self._cast_finished(identifier, result))
+
+    def _cast_finished(self, identifier, result):
+        self._cast_scan_in_progress = False
+        current = self.config.get("_cast_device_id", "")
+        if current == identifier:
+            if isinstance(result, Exception):
+                log_warning(f"Cast status check failed: {result}")
+                self.cast_status_label.setText("Cast: unavailable")
+                self.cast_status_label.setToolTip(f"Cast status check failed: {result}")
+            else:
+                _devices, status = result
+                if status is None:
+                    self.cast_status_label.setText("Cast: not found")
+                    self.cast_status_label.setToolTip("The selected receiver was not discovered.")
+                else:
+                    name = " ".join(status.device.name.split())[:60]
+                    activity = "idle" if status.idle else (status.application or "active")
+                    self.cast_status_label.setText(f"Cast: {name} ({' '.join(activity.split())[:60]})")
+                    self.cast_status_label.setToolTip("Status of the selected external Cast receiver.")
+        if self._cast_pending_refresh or current != identifier:
+            self._cast_pending_refresh = False
+            self.refresh_cast_status()
 
     def reload_controller_profile(self):
         profile_name = self.config.get("_controller_profile", "Xbox Controller.json")
@@ -235,6 +283,20 @@ class MainApp(QWidget, TaskRunnerMixin):
                 log_info("Closing the launched application after holding controller Back.")
             except OSError as error:
                 log_error(f"Failed to close launched application: {error}", details=str(error))
+
+    def handle_mapped_controller_input(self, input_name, is_x):
+        screensaver = getattr(self, "screensaver", None)
+        if screensaver is not None and screensaver.activity():
+            return
+        if not self.controller_capture_active and is_x and self.shortcut_keyboard_error is None:
+            keyboard = self.shortcut_keyboard
+            if keyboard is None:
+                modal = QApplication.activeModalWidget()
+                keyboard = modal if isinstance(modal, OnScreenKeyboard) else None
+            if keyboard is not None:
+                keyboard.backspace()
+                return
+        self.handle_controller_input(input_name)
 
     def handle_controller_input(self, input_name):
         if self.controller_capture_active:
@@ -526,6 +588,47 @@ class MainApp(QWidget, TaskRunnerMixin):
         if hasattr(self, "battery_indicator"):
             self.battery_indicator.reload()
 
+    def create_home_info_layout(self):
+        flat_style = (
+            "QPushButton {"
+            "background: transparent; border: none; padding: 0px;"
+            "color: #AAAAAA; font-size: 15px; font-weight: bold; text-align: left;"
+            "}"
+            "QPushButton:hover, QPushButton:focus { color: #FFFFFF; }"
+        )
+        self.weather_label = QPushButton("Current weather\nSet a city and country in Settings > Weather")
+        self.weather_label.setObjectName("launcherWeather")
+        self.weather_label.setFlat(True)
+        self.weather_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.weather_label.setStyleSheet(flat_style)
+        self.weather_label.clicked.connect(lambda: self.show_settings_page("weather"))
+
+        self.clock_label = QPushButton("Loading Time...")
+        self.clock_label.setObjectName("launcherClock")
+        self.clock_label.setFlat(True)
+        self.clock_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.clock_label.setStyleSheet(flat_style)
+        self.clock_label.clicked.connect(lambda: self.show_settings_page("ntp"))
+
+        self.version_label = QLabel()
+        self.version_label.setObjectName("launcherVersion")
+        self.version_label.setStyleSheet(
+            "background: transparent; color: #AAAAAA; font-size: 15px; font-weight: bold;"
+        )
+        self.update_home_version()
+        self._launcher_update_service.changed.connect(self.update_home_version)
+
+        layout = QVBoxLayout()
+        layout.setSpacing(8)
+        layout.addWidget(self.weather_label)
+        layout.addWidget(self.clock_label)
+        layout.addWidget(self.version_label)
+        return layout
+
+    def update_home_version(self):
+        version = self._launcher_update_service.current_version or "Unavailable"
+        self.version_label.setText(f"Version: {version}")
+
     def initUI(self):
         self.setWindowTitle("Application Launcher")
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
@@ -586,6 +689,12 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.main_layout.setContentsMargins(40, 40, 40, 40)
 
         top_layout = QHBoxLayout()
+        self.user_profile_label = QLabel(current_user_display_name())
+        self.user_profile_label.setObjectName("launcherUserProfile")
+        self.user_profile_label.setStyleSheet(
+            "background: transparent; color: #FFFFFF; font-size: 15px; font-weight: bold;"
+        )
+        top_layout.addWidget(self.user_profile_label, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         top_layout.addStretch()
 
         self.power_btn = QToolButton(self)
@@ -619,6 +728,10 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.power_btn.setMenu(self.power_menu)
         self.update_power_button_display()
         self.battery_indicator = BatteryIndicator(self.config, self)
+        self.cast_status_label = QLabel()
+        self.cast_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.cast_status_label.setStyleSheet("background: transparent; color: #FFFFFF;")
+        top_layout.addWidget(self.cast_status_label, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         top_layout.addWidget(self.battery_indicator, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         
         # Add WiFi indicator between battery and power button
@@ -639,35 +752,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.main_layout.addStretch()
 
         bottom_layout = QHBoxLayout()
-
-        # Flat buttons keep the text looking like plain labels while staying clickable and focusable.
-        flat_style = (
-            "QPushButton {"
-            "background: transparent; border: none; padding: 0px;"
-            "color: #AAAAAA; font-size: 15px; font-weight: bold; text-align: left;"
-            "}"
-            "QPushButton:hover, QPushButton:focus { color: #FFFFFF; }"
-        )
-
-        self.weather_label = QPushButton("Current weather\nSet a city and country in Settings > Weather")
-        self.weather_label.setObjectName("launcherWeather")
-        self.weather_label.setFlat(True)
-        self.weather_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.weather_label.setStyleSheet(flat_style)
-        self.weather_label.clicked.connect(lambda: self.show_settings_page("weather"))
-
-        self.clock_label = QPushButton("Loading Time...")
-        self.clock_label.setObjectName("launcherClock")
-        self.clock_label.setFlat(True)
-        self.clock_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.clock_label.setStyleSheet(flat_style)
-        self.clock_label.clicked.connect(lambda: self.show_settings_page("ntp"))
-
-        date_time_layout = QVBoxLayout()
-        date_time_layout.setSpacing(8)
-        date_time_layout.addWidget(self.weather_label)
-        date_time_layout.addWidget(self.clock_label)
-        bottom_layout.addLayout(date_time_layout)
+        bottom_layout.addLayout(self.create_home_info_layout())
 
         self.config_btn = QPushButton("⚙ Settings")
         self.config_btn.setObjectName("launcherSettingsButton")
@@ -687,10 +772,16 @@ class MainApp(QWidget, TaskRunnerMixin):
         )
         bottom_layout.addWidget(self.config_btn, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
-        self.apps_layout = QHBoxLayout()
+        self.apps_container = QWidget()
+        self.apps_layout = QHBoxLayout(self.apps_container)
+        self.apps_layout.setContentsMargins(0, 0, 0, 0)
         self.apps_layout.setSpacing(35)
         self.apps_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.main_layout.addLayout(self.apps_layout)
+        self.main_layout.addWidget(self.apps_container)
+        self.home_page_label = QLabel()
+        self.home_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.home_page_label.setStyleSheet("color: #AAAAAA; background: transparent;")
+        self.main_layout.addWidget(self.home_page_label)
 
         self.refresh_applications_view()
 
@@ -1018,6 +1109,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             return False
         self.config["_active_home_profile"] = name
         self.config["_home_profiles"] = profiles
+        self._home_page_index = 0
         self.save_config_file()
         self.refresh_applications_view()
         return True
@@ -1223,7 +1315,80 @@ class MainApp(QWidget, TaskRunnerMixin):
                 if isinstance(btn, AnimatedLauncherButton):
                     btn.set_original_geometry(btn.geometry())
 
-    def refresh_applications_view(self):
+    def change_home_page(self, direction):
+        pages = home_application_pages(self.config)
+        if len(pages) < 2:
+            return False
+        animate = (
+            self.animations_enabled()
+            and self.config.get("_home_page_animation", True)
+            and self.apps_container.isVisible()
+        )
+        if self._home_page_slide_group is not None:
+            self._home_page_slide_group.stop()
+            self._home_page_slide_group.deleteLater()
+            self._home_page_slide_group = None
+        if self._home_page_slide_overlay is not None:
+            self._home_page_slide_overlay.hide()
+            self._home_page_slide_overlay.deleteLater()
+            self._home_page_slide_overlay = None
+        previous = self.apps_container.grab() if animate else None
+        self._home_page_index = (self._home_page_index + direction) % len(pages)
+        self.refresh_applications_view(animate=False)
+        if direction < 0 and self.apps_layout.count():
+            self.apps_layout.itemAt(self.apps_layout.count() - 1).widget().setFocus()
+        if previous is not None and not previous.isNull():
+            self.apps_layout.activate()
+            self._animate_home_page_slide(previous, direction)
+        return True
+
+    def _animate_home_page_slide(self, previous, direction):
+        size = self.apps_container.size()
+        if size.width() <= 0 or size.height() <= 0:
+            return
+        current = self.apps_container.grab()
+        if current.isNull():
+            return
+        overlay = QWidget(self.home_tab)
+        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        overlay.setGeometry(QRect(self.apps_container.mapTo(self.home_tab, QPoint(0, 0)), size))
+        old_image = QLabel(overlay)
+        old_image.setPixmap(previous)
+        old_image.resize(size)
+        new_image = QLabel(overlay)
+        new_image.setPixmap(current)
+        new_image.resize(size)
+        new_image.move(direction * size.width(), 0)
+        overlay.show()
+        overlay.raise_()
+        duration = self.config.get("_home_page_animation_ms", 220)
+        if not isinstance(duration, int) or isinstance(duration, bool) or not 100 <= duration <= 1000:
+            log_warning(f"Invalid Home page animation duration {duration!r}; using 220 ms.")
+            duration = 220
+        group = QParallelAnimationGroup(self)
+        for label, start, end in (
+            (old_image, QPoint(0, 0), QPoint(-direction * size.width(), 0)),
+            (new_image, QPoint(direction * size.width(), 0), QPoint(0, 0)),
+        ):
+            animation = QPropertyAnimation(label, b"pos", group)
+            animation.setDuration(duration)
+            animation.setStartValue(start)
+            animation.setEndValue(end)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            group.addAnimation(animation)
+        self._home_page_slide_group = group
+        self._home_page_slide_overlay = overlay
+
+        def finish():
+            overlay.deleteLater()
+            group.deleteLater()
+            self._home_page_slide_group = None
+            self._home_page_slide_overlay = None
+
+        group.finished.connect(finish)
+        group.start()
+
+    def refresh_applications_view(self, animate=True):
         while self.apps_layout.count():
             item = self.apps_layout.takeAt(0)
             widget = item.widget()
@@ -1238,8 +1403,11 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         first_app_btn = None
 
-        names = application_names(self.config)
-        for name in ordered_home_applications(self.config, names):
+        pages = home_application_pages(self.config)
+        self._home_page_index = min(self._home_page_index, len(pages) - 1)
+        self.home_page_label.setText(f"Page {self._home_page_index + 1} / {len(pages)}")
+        self.home_page_label.setVisible(len(pages) > 1)
+        for name in pages[self._home_page_index]:
             data = self.config[name]
 
             btn = AnimatedLauncherButton(self, enable_animations=enable_anim, enable_glitch=enable_glitch, theme_color=theme_color)
@@ -1267,7 +1435,7 @@ class MainApp(QWidget, TaskRunnerMixin):
             first_app_btn.setFocus()
 
         QTimer.singleShot(100, self.refresh_button_geometries)
-        if self.home_tabs.currentWidget() is self.home_tab and self.home_page.isVisible():
+        if animate and self.home_tabs.currentWidget() is self.home_tab and self.home_page.isVisible():
             QTimer.singleShot(0, self.animate_home_transition)
 
     def launch_app(self, data):

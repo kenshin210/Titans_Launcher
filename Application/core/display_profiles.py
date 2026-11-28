@@ -7,8 +7,11 @@ Profiles are stored in ~/.local/share/titans/display_profiles.json
 
 import logging
 import json
+import os
+import tempfile
+from copy import deepcopy
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, asdict
 
 from Application.core.display_settings import DisplaySettingsManager
@@ -93,14 +96,32 @@ class DisplayProfilesManager:
         }
         self._save_config()
 
-    def _save_config(self):
+    def _save_config(self, previous=None):
         """Save configuration to file."""
+        temporary_path = None
         try:
-            with open(self.config_path, 'w') as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.config_path.parent,
+                prefix=f".{self.config_path.name}.", delete=False,
+            ) as f:
+                temporary_path = Path(f.name)
                 json.dump(self.config, f, indent=2)
-                logger.debug(f"Saved display profiles to {self.config_path}")
-        except IOError as e:
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_path, self.config_path)
+            logger.debug(f"Saved display profiles to {self.config_path}")
+            return True
+        except (OSError, TypeError, ValueError) as e:
+            if previous is not None:
+                self.config = previous
             logger.error(f"Error saving config: {e}")
+            return False
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as e:
+                    logger.error(f"Error removing temporary config: {e}")
 
     def add_profile(self, profile: DisplayProfile) -> bool:
         """Add a new display profile.
@@ -122,8 +143,10 @@ class DisplayProfilesManager:
             logger.warning(f"Maximum number of profiles ({self.MAX_PROFILES}) reached")
             return False
 
+        previous = deepcopy(self.config)
         self.config['profiles'].append(profile.to_dict())
-        self._save_config()
+        if not self._save_config(previous):
+            return False
         logger.info(f"Added profile: {profile.name}")
         return True
 
@@ -139,8 +162,10 @@ class DisplayProfilesManager:
         """
         for i, p in enumerate(self.config['profiles']):
             if p['name'] == name:
+                previous = deepcopy(self.config)
                 self.config['profiles'][i] = profile.to_dict()
-                self._save_config()
+                if not self._save_config(previous):
+                    return False
                 logger.info(f"Updated profile: {name}")
                 return True
 
@@ -158,11 +183,13 @@ class DisplayProfilesManager:
         """
         for i, p in enumerate(self.config['profiles']):
             if p['name'] == name:
+                previous = deepcopy(self.config)
                 self.config['profiles'].pop(i)
                 # Clear current profile if it was the one deleted
                 if self.config['current_profile'] == name:
                     self.config['current_profile'] = None
-                self._save_config()
+                if not self._save_config(previous):
+                    return False
                 logger.info(f"Deleted profile: {name}")
                 return True
 
@@ -205,8 +232,10 @@ class DisplayProfilesManager:
             logger.warning(f"Profile '{name}' not found")
             return False
 
+        previous = deepcopy(self.config)
         self.config['current_profile'] = name
-        self._save_config()
+        if not self._save_config(previous):
+            return False
         logger.info(f"Set current profile to: {name}")
         return True
 
@@ -239,11 +268,13 @@ class DisplayProfilesManager:
         # Find and rename
         for p in self.config['profiles']:
             if p['name'] == old_name:
+                previous = deepcopy(self.config)
                 p['name'] = new_name
                 # Update current profile if it was the one renamed
                 if self.config['current_profile'] == old_name:
                     self.config['current_profile'] = new_name
-                self._save_config()
+                if not self._save_config(previous):
+                    return False
                 logger.info(f"Renamed profile: {old_name} -> {new_name}")
                 return True
 
@@ -350,8 +381,11 @@ class DisplayProfilesManager:
                 logger.error("Could not apply display profile scale for %s: %s", name, message)
                 return False
 
+            previous = deepcopy(self.config)
             self.config['current_profile'] = name
-            self._save_config()
+            if not self._save_config(previous):
+                logger.error("Display settings changed, but the active profile could not be saved")
+                return False
             logger.info(f"Applied profile: {name}")
             return True
 

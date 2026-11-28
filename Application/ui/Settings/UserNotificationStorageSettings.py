@@ -2,7 +2,11 @@
 
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -12,6 +16,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PyQt6 import sip
 from PyQt6.QtCore import Qt
 
 from Application.core.notification_system import NotificationCategory, NotificationManager
@@ -30,8 +35,8 @@ class UserSessionsSettingsWidget(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
-            "Accounts are managed by Linux. Titans does not create accounts or "
-            "switch identities directly; the display manager handles sign-in."
+            "Create standard Linux accounts with administrator authorization. "
+            "The display manager handles sign-in and switching."
         ))
         layout.addWidget(QLabel("Local accounts"))
         self.accounts_list = QListWidget()
@@ -59,7 +64,62 @@ class UserSessionsSettingsWidget(QWidget):
         self.greeter_button.clicked.connect(self.switch_to_login_screen)
         layout.addWidget(self.greeter_button)
 
+        self.create_button = QPushButton("Create Standard User")
+        self.create_button.clicked.connect(self.create_user)
+        layout.addWidget(self.create_button)
+
         self.refresh()
+
+    def create_user(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Create Standard User")
+        layout = QVBoxLayout(dialog)
+        form = QFormLayout()
+        username = QLineEdit()
+        name = QLineEdit()
+        password = QLineEdit()
+        confirmation = QLineEdit()
+        password.setEchoMode(QLineEdit.EchoMode.Password)
+        confirmation.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow("Username:", username)
+        form.addRow("Display name:", name)
+        form.addRow("Password:", password)
+        form.addRow("Confirm password:", confirmation)
+        layout.addLayout(form)
+        layout.addWidget(QLabel("An administrator must authorize this action."))
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            password.clear()
+            confirmation.clear()
+            return
+        secret = password.text()
+        matches = secret == confirmation.text()
+        password.clear()
+        confirmation.clear()
+        if not matches:
+            QMessageBox.warning(self, "Create User", "Passwords do not match.")
+            return
+        account_name = username.text().strip()
+        display_name = name.text().strip()
+        self.create_button.setEnabled(False)
+        self.status_label.setText("Waiting for administrator authorization...")
+
+        def finished(result):
+            if not sip.isdeleted(self):
+                self.create_button.setEnabled(True)
+            if isinstance(result, Exception):
+                QMessageBox.warning(self.launcher, "Create User Failed", str(result))
+            else:
+                QMessageBox.information(self.launcher, "Create User", "Standard user created.")
+            if not sip.isdeleted(self):
+                self.refresh()
+
+        self.launcher.run_async(
+            lambda: self.user_manager.create_account(account_name, display_name, secret), finished,
+        )
 
     def refresh(self):
         self.accounts_list.clear()

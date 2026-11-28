@@ -79,11 +79,13 @@ else
 fi
 
 PACMAN_PACKAGES=(
+    accountsservice
     antimicrox
     bluez
     bluez-utils
     brightnessctl
     dbus
+    dnsmasq
     firefox
     gcc
     git
@@ -101,6 +103,7 @@ PACMAN_PACKAGES=(
     networkmanager
     networkmanager-openvpn
     openvpn
+    openssl
     pacman-contrib
     pciutils
     polkit
@@ -127,15 +130,24 @@ printf 'Creating or reusing virtual environment at %s\n' "$VENV_DIR"
 python -m venv "$VENV_DIR"
 
 PYTHON_PACKAGES=(
+    dbus-next
     evdev
     opencv-python
     pygame-ce
     psutil
+    PyChromecast
     PyQt6
+    qrcode
 )
 
 printf 'Installing Python dependencies into the virtual environment...\n'
 "$VENV_DIR/bin/python" -m pip install "${PYTHON_PACKAGES[@]}"
+
+printf 'Checking installed Python modules...\n'
+if ! "$VENV_DIR/bin/python" -c 'import cv2, evdev, psutil, pygame, pychromecast, dbus_next, qrcode; from pygame._sdl2 import controller; from PyQt6 import QtCore, QtDBus, QtGui, QtWidgets'; then
+    printf 'Python module verification failed. Check the errors above and rerun the installer.\n' >&2
+    exit 1
+fi
 
 printf 'Configuring virtual input access for the active local desktop user...\n'
 printf 'uinput\n' | "${PRIVILEGED[@]}" tee /etc/modules-load.d/titans-uinput.conf >/dev/null

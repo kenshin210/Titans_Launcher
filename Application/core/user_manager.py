@@ -10,11 +10,27 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from PyQt6.QtDBus import QDBus, QDBusConnection, QDBusMessage, QDBusObjectPath
+
 logger = logging.getLogger(__name__)
 
 _VALID_SESSION_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+_VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
 class UserManagerError(RuntimeError):
     """Raised when account/session discovery or switching fails."""
+
+
+def current_user_display_name():
+    try:
+        entry = pwd.getpwuid(os.getuid())
+    except (KeyError, OSError) as error:
+        logger.warning("Could not read the current Linux account: %s", error)
+        return "Unavailable"
+    name = "".join(
+        character for character in entry.pw_gecos.split(",", 1)[0].strip()
+        if character.isprintable()
+    )[:100]
+    return name or entry.pw_name
 
 
 @dataclass(frozen=True)
@@ -40,14 +56,78 @@ class UserSession:
 
 
 class UserManager:
-    """List local interactive accounts and ask the desktop to switch sessions.
-
-    Accounts are never created, removed, or impersonated by Titans. The
-    operating system's display manager remains responsible for authentication.
-    """
+    """Manage local accounts via system services and switch login sessions."""
 
     def __init__(self, uid_min: Optional[int] = None):
         self.uid_min = self._read_uid_min() if uid_min is None else uid_min
+
+    @staticmethod
+    def create_account(username: str, display_name: str, password: str) -> None:
+        """Create a standard account with administrator authorization."""
+        if not isinstance(username, str) or not _VALID_USERNAME.fullmatch(username):
+            raise UserManagerError("Use a lowercase Linux username containing only letters, digits, _ or -.")
+        if not isinstance(display_name, str) or len(display_name) > 100 or any(
+            not character.isprintable() or character in ",:" for character in display_name
+        ):
+            raise UserManagerError("Display name contains unsupported characters or is too long.")
+        if not isinstance(password, str) or not password or any(c in password for c in "\x00\r\n"):
+            raise UserManagerError("Enter a non-empty password without line breaks.")
+        try:
+            password_length = len(password.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise UserManagerError("Password contains unsupported characters.") from error
+        if password_length > 128:
+            raise UserManagerError("Password must be at most 128 UTF-8 bytes.")
+        try:
+            result = subprocess.run(
+                ["openssl", "passwd", "-6", "-stdin"],
+                input=password + "\n", text=True, capture_output=True, timeout=10, check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise UserManagerError("Could not prepare the password; check that OpenSSL is installed.") from error
+        hashed = result.stdout.strip()
+        if result.returncode != 0 or not hashed.startswith("$6$") or "\n" in hashed:
+            raise UserManagerError("Could not prepare the password using OpenSSL.")
+        bus = QDBusConnection.systemBus()
+        if not bus.isConnected():
+            raise UserManagerError("The system D-Bus is unavailable; no account was requested.")
+
+        def call(path, interface, method, arguments):
+            message = QDBusMessage.createMethodCall(
+                "org.freedesktop.Accounts", path, interface, method,
+            )
+            message.setArguments(arguments)
+            message.setInteractiveAuthorizationAllowed(True)
+            try:
+                reply = bus.call(message, QDBus.CallMode.Block, 120000)
+            except (RuntimeError, TypeError) as error:
+                raise UserManagerError("D-Bus communication failed") from error
+            if reply.type() == QDBusMessage.MessageType.ErrorMessage:
+                raise UserManagerError(reply.errorName() or "system service error")
+            return reply.arguments()
+
+        try:
+            response = call(
+                "/org/freedesktop/Accounts", "org.freedesktop.Accounts", "CreateUser",
+                [username, display_name or username, 0],
+            )
+        except UserManagerError as error:
+            raise UserManagerError(
+                f"Account creation failed ({error}). If the request timed out, check system "
+                "account settings before trying again."
+            ) from error
+        if len(response) != 1 or not isinstance(response[0], QDBusObjectPath):
+            raise UserManagerError(
+                "The account service returned an unexpected response. Check system account "
+                "settings before trying again."
+            )
+        try:
+            call(response[0].path(), "org.freedesktop.Accounts.User", "SetPassword", [hashed, ""])
+        except UserManagerError as error:
+            raise UserManagerError(
+                f"The account '{username}' was created, but its password could not be confirmed "
+                f"({error}). Use system account settings to set a password or remove it."
+            ) from error
 
     @staticmethod
     def _read_uid_min() -> int:

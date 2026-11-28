@@ -19,6 +19,7 @@ from PyQt6.QtCore import Qt
 from Application.styles import load_stylesheet
 from Application.ui.Settings.AsyncTask import TaskRunnerMixin, command_error, run_command
 from Application.ui.Settings.Logger import log_info, log_warning
+from Application.ui.Settings.PhoneWifiSetup import PhoneWifiDialog
 
 
 def split_terse(line):
@@ -35,6 +36,7 @@ class WifiSettingsWidget(QWidget, TaskRunnerMixin):
         self.setStyleSheet(load_stylesheet(theme_color=launcher.get_theme_color()))
         self.nmcli = shutil.which("nmcli")
         self.wifi_device = None
+        self.wifi_devices = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 10, 0)
@@ -76,8 +78,10 @@ class WifiSettingsWidget(QWidget, TaskRunnerMixin):
         self.quick_combo.setObjectName("soundDisplayControl")
         self.quick_combo.setPlaceholderText("No saved networks")
         self.quick_button = self._make_button("Quick Connect", self.quick_connect_selected)
+        self.phone_button = self._make_button("Set Up with Phone", self.phone_setup)
         row.addWidget(self.quick_combo, stretch=1)
         row.addWidget(self.quick_button)
+        row.addWidget(self.phone_button)
         card_layout.addLayout(row)
 
         hint = QLabel("Reconnect to a saved network in one step. Double-click any network below to connect as well.")
@@ -142,7 +146,7 @@ class WifiSettingsWidget(QWidget, TaskRunnerMixin):
     def _set_controls_enabled(self, enabled):
         for widget in (
             self.network_list, self.saved_list, self.password_input, self.scan_button,
-            self.quick_combo, self.quick_button,
+            self.quick_combo, self.quick_button, self.phone_button,
             self.connect_button, self.disconnect_button, self.radio_button,
         ):
             widget.setEnabled(enabled)
@@ -170,11 +174,13 @@ class WifiSettingsWidget(QWidget, TaskRunnerMixin):
             enabled = radio.stdout.strip().lower() == "enabled"
             self.radio_button.setText("Turn Wi-Fi Off" if enabled else "Turn Wi-Fi On")
             self.wifi_device = None
+            self.wifi_devices = []
             for line in devices.stdout.splitlines():
                 fields = split_terse(line)
                 if len(fields) >= 3 and fields[1] == "wifi":
-                    self.wifi_device = fields[0]
-                    break
+                    self.wifi_devices.append(fields[0])
+            if self.wifi_devices:
+                self.wifi_device = self.wifi_devices[0]
             if self.wifi_device is None:
                 self.status.setText("No Wi-Fi adapter was detected.")
                 self._set_controls_enabled(False)
@@ -183,6 +189,20 @@ class WifiSettingsWidget(QWidget, TaskRunnerMixin):
                 self.status.setText("Wi-Fi is on." if enabled else "Wi-Fi is turned off.")
 
         self.run_async(work, done)
+
+    def phone_setup(self):
+        dialog = getattr(self, "_phone_dialog", None)
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        if getattr(self.launcher, "_phone_wifi_in_progress", False):
+            self.status.setText("Phone setup is still running or stopping.")
+            return
+        self._phone_dialog = PhoneWifiDialog(
+            self.launcher, self.wifi_devices, self.nmcli, self.refresh_all, self,
+        )
+        self._phone_dialog.show()
 
     def scan_networks(self):
         if not self.nmcli:

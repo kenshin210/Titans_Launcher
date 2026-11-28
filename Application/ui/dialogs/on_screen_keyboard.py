@@ -102,7 +102,7 @@ class KeyboardCard(QWidget):
 class OnScreenKeyboard(QDialog):
     """Controller-driven text entry.
 
-    D-pad moves over the rounded keys, A types, LB deletes, and RB adds a space.
+    D-pad moves over the rounded keys, A types, X or LB deletes, and RB adds a space.
     The page key switches between letters and symbols; a physical keyboard also works.
     """
 
@@ -227,7 +227,7 @@ class OnScreenKeyboard(QDialog):
         layout.addWidget(self.cancel_button, alignment=Qt.AlignmentFlag.AlignRight)
 
         cancel_hint = "close" if input_device is not None else "cancel"
-        hint = QLabel(f"D-pad / stick: move    A: type    LB: delete    RB: space    B: {cancel_hint}")
+        hint = QLabel(f"D-pad / stick: move    A: type    X / LB: delete    RB: space    B: {cancel_hint}")
         hint.setObjectName("keyboardHint")
         layout.addWidget(hint)
 
