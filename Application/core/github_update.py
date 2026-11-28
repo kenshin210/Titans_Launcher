@@ -33,10 +33,24 @@ UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000
 MAX_API_RESPONSE_BYTES = 5_000_000
 MAX_ARCHIVE_BYTES = 100_000_000
 MAX_ARCHIVE_FILE_BYTES = 50_000_000
+MAX_VERSION_BYTES = 64
 RESTART_FREE_FILES = {
     "ArchModuleInstall.sh", "SetupAutostart.sh", "InstallerDialogs.sh",
     "generate_launcher_manifest.py",
+    "VERSION",
 }
+
+
+def _parse_version(content):
+    if len(content) > MAX_VERSION_BYTES:
+        raise ValueError("Launcher VERSION metadata is too large.")
+    try:
+        version = content.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise ValueError("Launcher VERSION metadata must be UTF-8 text.") from error
+    if not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?(?: (?:alpha|beta|rc)(?: [0-9]+)?)?", version):
+        raise ValueError("Invalid launcher VERSION metadata; expected a version such as 0.01 alpha.")
+    return version
 
 
 def _read_url(url, accept, max_bytes):
@@ -122,11 +136,23 @@ def fetch_branch_tree(branch, repository=GITHUB_REPOSITORY):
     if not files:
         raise ValueError(f"GitHub's {branch} branch contains no launcher build files.")
 
+    version = None
+    if "VERSION" in files:
+        content = _read_url(
+            f"https://raw.githubusercontent.com/{repository}/{commit_sha}/VERSION",
+            "text/plain", MAX_VERSION_BYTES,
+        )
+        if _git_blob_sha(content) != files["VERSION"]:
+            raise ValueError("GitHub VERSION metadata hash mismatch.")
+        version = _parse_version(content)
+    else:
+        log_warning(f"GitHub {repository} branch {branch} does not provide VERSION metadata.")
     message = commit.get("commit", {}).get("message", "")
     return {
         "sha": commit_sha,
         "message": message.splitlines()[0] if isinstance(message, str) and message else "",
         "files": files,
+        "version": version,
     }
 
 
@@ -168,6 +194,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         self.restart_required = False
         self.status = "GitHub update check has not run yet."
         self.remote_info = None
+        self.current_version = self._read_installed_version()
         try:
             self._runtime_manifest = make_manifest(self.root)
         except OSError as error:
@@ -179,6 +206,13 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         if auto_start:
             self._timer.start()
             QTimer.singleShot(15_000, self.check)
+
+    def _read_installed_version(self):
+        try:
+            return _parse_version((self.root / "VERSION").read_bytes())
+        except (OSError, ValueError) as error:
+            log_warning(f"Installed launcher version is unavailable: {error}")
+            return None
 
     @property
     def channel(self):
@@ -369,6 +403,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         else:
             self.available = False
             self.remote_info = None
+            self.current_version = self._read_installed_version()
             installed_manifest = result.get("installed_manifest")
             changed_files = result.get("changed_files")
             if (
@@ -441,6 +476,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         repository = remote_info.get("repository", GITHUB_REPOSITORY)
         validate_custom_source(repository, branch)
         self._run_git("fetch", "--no-tags", f"https://github.com/{repository}.git", f"refs/heads/{branch}")
+        if remote_info.get("version") is not None and self._run_git("rev-parse", "FETCH_HEAD") != remote_info["sha"]:
+            raise RuntimeError("The versioned update changed since the check. Check again before installing.")
         if remote_info.get("channel") == "Custom":
             if self._run_git("rev-parse", "FETCH_HEAD") != remote_info["sha"]:
                 raise RuntimeError("The custom branch changed since the update check. Check again before installing.")
@@ -450,6 +487,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             self._run_git("merge", "--ff-only", "FETCH_HEAD")
         else:
             self._run_git("switch", "--create", branch, "FETCH_HEAD")
+        if (self.root / "VERSION").is_file():
+            _parse_version((self.root / "VERSION").read_bytes())
         installed_manifest = make_manifest(self.root)
         manifest_path = self.root / MANIFEST_NAME
         with tempfile.NamedTemporaryFile(
@@ -534,6 +573,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
                     raise ValueError(f"GitHub archive hash mismatch for {name}.")
                 staged_data[name] = content
 
+        if "VERSION" in staged_data:
+            _parse_version(staged_data["VERSION"])
         manifest = {
             name: hashlib.sha256(content).hexdigest()
             for name, content in staged_data.items()

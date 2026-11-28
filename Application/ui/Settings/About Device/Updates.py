@@ -212,6 +212,12 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
 
         launcher_update_title = QLabel("Launcher updates")
         layout.addWidget(launcher_update_title)
+        self.installed_version_label = QLabel()
+        self.next_version_label = QLabel()
+        self.installed_version_label.setWordWrap(True)
+        self.next_version_label.setWordWrap(True)
+        layout.addWidget(self.installed_version_label)
+        layout.addWidget(self.next_version_label)
         channel_row = QHBoxLayout()
         channel_row.addWidget(QLabel("Update channel:"))
         self.update_channel_combo = QComboBox()
@@ -347,6 +353,8 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
             f"Download and install launcher files from GitHub "
             f"{self.launcher_update_service.repository}, branch "
             f"{self.launcher_update_service.branch}?\n\n"
+            f"Installed version: {self.launcher_update_service.current_version or 'Unavailable'}\n"
+            f"Update version: {(self.launcher_update_service.remote_info or {}).get('version') or 'Not provided by source'}\n\n"
             "Only install sources you trust; this will run their code. "
             "You will be asked to restart only if the update requires it.",
         )
@@ -444,6 +452,20 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
             self.update_channel_combo.blockSignals(False)
         custom = self.update_channel_combo.currentText() == "Custom"
         pending = self._custom_source_pending()
+        self.installed_version_label.setText(
+            f"Installed version: {self.launcher_update_service.current_version or 'Unavailable'}"
+        )
+        if pending:
+            next_version = "Apply the custom source first"
+        elif self.launcher_update_service.busy and not self.launcher_update_service.installing:
+            next_version = "Checking..."
+        elif self.launcher_update_service.remote_info is None:
+            next_version = "Unknown (check GitHub)"
+        elif not self.launcher_update_service.available:
+            next_version = "No update available"
+        else:
+            next_version = self.launcher_update_service.remote_info.get("version") or "Not provided by source"
+        self.next_version_label.setText(f"Next update version: {next_version}")
         self.custom_source_row.setVisible(custom)
         self.custom_source_row.setEnabled(not self.launcher_update_service.busy)
         self.launcher_update_status.setText(

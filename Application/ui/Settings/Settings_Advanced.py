@@ -44,6 +44,7 @@ from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySet
 from Application.ui.Settings.HomeProfilesWidget import HomeProfilesWidget
 from Application.ui.Settings.ButtonStyleWidget import ButtonStyleWidget
 from Application.ui.Settings.StartupScreenSettings import StartupScreenSettingsWidget
+from Application.ui.Settings.BrowserSettingsWidget import BrowserSettingsWidget
 from Application.core import corner_style
 
 AboutDeviceWidget = import_module(
@@ -96,6 +97,7 @@ class AdvancedSettingsWidget(QWidget):
             ("General", "general", self.create_general_page),
             ("Background", "background", self.create_background_page),
             ("Startup", "startup", lambda: StartupScreenSettingsWidget(self.launcher)),
+            ("Browser", "browser", lambda: BrowserSettingsWidget(self.launcher)),
             ("Theme", "theme", self.create_theme_page),
             ("Buttons", "buttons", lambda: ButtonStyleWidget(self.launcher)),
             ("Power", "power", self.create_power_page),
@@ -510,7 +512,8 @@ class AdvancedSettingsWidget(QWidget):
                 profile_path=data.get("profile", ""),
                 controller_close_enabled=data.get("controller_close_enabled", False),
                 app_type=data.get("type", "application"),
-                website_url=data.get("website_url", "")
+                website_url=data.get("website_url", ""),
+                website_display_mode=data.get("website_display_mode", "kiosk"),
             )
             if editor.exec() == 1:
                 new_name, new_data = editor.get_data()

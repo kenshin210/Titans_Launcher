@@ -52,6 +52,7 @@ from .core.config import (
 from .core.session_manager import SessionManager
 from .core.application_manager import ApplicationManager
 from .core.window_activation import WindowActivationManager
+from .core.website import website_arguments
 from .core.controller import (
     PYGAME_AVAILABLE,
     PygameControllerThread,
@@ -527,8 +528,9 @@ class MainApp(QWidget, TaskRunnerMixin):
 
     def initUI(self):
         self.setWindowTitle("Application Launcher")
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.showFullScreen()
+        self.showMaximized()
 
         self.bg_label = QLabel(self)
         self.bg_label.setObjectName("launcherBackground")
@@ -1290,6 +1292,33 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         executable_name = Path(executable).name.lower()
         is_website = data.get("type") == "website"
+        website_display_mode = data.get("website_display_mode", "kiosk")
+        try:
+            arguments = shlex.split(arguments_str)
+            if is_website and "website_display_mode" in data:
+                url = data.get("website_url", "").strip()
+                if not url:
+                    raise ValueError("The website shortcut has no URL.")
+                mode_arguments = website_arguments(website_display_mode, url)
+                arguments = [
+                    argument for argument in arguments
+                    if argument not in ("--kiosk", "-kiosk", "--start-maximized", "-start-maximized")
+                    and argument != url
+                ]
+                arguments.extend(mode_arguments)
+                if (
+                    website_display_mode in ("maximized", "fullscreen")
+                    and executable_name not in ("firefox", "firefox-esr")
+                ):
+                    raise ValueError("This display mode requires Firefox.")
+                if website_display_mode == "fullscreen":
+                    available, message = WindowActivationManager.fullscreen_available()
+                    if not available:
+                        raise ValueError(message)
+        except ValueError as error:
+            log_error(f"Invalid website or application launch settings: {error}")
+            self.show_error_overlay("Launch Settings Error", str(error))
+            return
         manage_antimicrox = data.get("manage_antimicrox", False)
         profile_path = data.get("profile", "")
         is_firefox = executable_name in ("firefox", "firefox-esr")
@@ -1333,7 +1362,6 @@ class MainApp(QWidget, TaskRunnerMixin):
                 )
 
         cmd_list = [executable]
-        arguments = shlex.split(arguments_str)
         if executable_name in ("firefox", "firefox-esr") and not is_website:
             arguments = [argument for argument in arguments if argument != "--kiosk"]
 
@@ -1423,6 +1451,22 @@ class MainApp(QWidget, TaskRunnerMixin):
             return
 
         self.enter_sleep_state()
+        if is_website and website_display_mode == "fullscreen":
+            def fullscreen_finished(result):
+                if self.active_app_process is not proc:
+                    return
+                if isinstance(result, Exception):
+                    success, message = False, str(result)
+                else:
+                    success, message = result
+                if not success:
+                    log_error(f"Website fullscreen failed: {message}")
+                    self.show_error_overlay("Website Fullscreen Failed", message)
+
+            self.run_async(
+                lambda: WindowActivationManager().fullscreen(proc.pid),
+                fullscreen_finished,
+            )
         if self.browser_controller:
             self.controller_thread.set_browser_pointer_enabled(True)
 
@@ -1465,7 +1509,7 @@ class MainApp(QWidget, TaskRunnerMixin):
         self.active_app_is_firefox = False
         self.launcher_sleeping = False
         self.controller_back_suppressed_until = time.monotonic() + 1.0
-        self.showFullScreen()
+        self.showMaximized()
         if getattr(self, "_launcher_update_restart_pending", False):
             QTimer.singleShot(0, self.prompt_restart_after_update)
         if hasattr(self, "clock_timer"):

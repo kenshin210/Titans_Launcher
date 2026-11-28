@@ -1,10 +1,12 @@
 """Window activation helpers for X11 and KWin Wayland sessions."""
 
 import logging
+import json
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Optional, Tuple
@@ -12,8 +14,49 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
+def _qdbus_executable():
+    return next(
+        (
+            executable
+            for name in ("qdbus6", "qdbus-qt6", "qdbus", "qdbus-qt5")
+            if (executable := shutil.which(name))
+        ),
+        None,
+    )
+
+
 class WindowActivationManager:
     """Activate a managed application's window through the available compositor."""
+
+    @staticmethod
+    def fullscreen_available() -> Tuple[bool, str]:
+        if (
+            os.environ.get("XDG_SESSION_TYPE", "").lower() != "wayland"
+            and not os.environ.get("WAYLAND_DISPLAY")
+        ):
+            return False, "Automatic website fullscreen requires KDE Wayland."
+        qdbus = _qdbus_executable()
+        if qdbus is None:
+            return False, "Automatic website fullscreen requires qdbus and KWin."
+        try:
+            result = subprocess.run(
+                [qdbus, "org.kde.KWin", "/Scripting", "isScriptLoaded",
+                 "titans-fullscreen-backend-probe"],
+                capture_output=True, text=True, timeout=3, check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            return False, f"Could not reach KWin: {error}"
+        if result.returncode != 0 or result.stdout.strip().lower() not in ("true", "false"):
+            return False, result.stderr.strip() or "KWin scripting is unavailable."
+        return True, "KWin fullscreen backend is available."
+
+    def fullscreen(self, pid: int) -> Tuple[bool, str]:
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            return False, "Invalid process identifier"
+        available, message = self.fullscreen_available()
+        if not available:
+            return False, message
+        return self._activate_with_kwin(pid, fullscreen=True)
 
     def activate(self, pid: int) -> Tuple[bool, str]:
         if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
@@ -84,15 +127,8 @@ class WindowActivationManager:
             return False, str(error)
 
     @staticmethod
-    def _activate_with_kwin(pid: int) -> Tuple[bool, str]:
-        qdbus = next(
-            (
-                executable
-                for name in ("qdbus6", "qdbus-qt6", "qdbus", "qdbus-qt5")
-                if (executable := shutil.which(name))
-            ),
-            None,
-        )
+    def _activate_with_kwin(pid: int, fullscreen: bool = False) -> Tuple[bool, str]:
+        qdbus = _qdbus_executable()
         if qdbus is None:
             return False, "KWin Wayland activation requires a qdbus executable"
 
@@ -108,7 +144,7 @@ class WindowActivationManager:
                 delete=False,
             ) as script:
                 script_path = Path(script.name)
-                script.write(
+                activation_script = (
                     "var targetPid = "
                     f"{pid};\n"
                     "var windows = workspace.stackingOrder;\n"
@@ -126,6 +162,35 @@ class WindowActivationManager:
                     "  }\n"
                     "}\n"
                 )
+                if fullscreen:
+                    script.write(
+                        f"var targetPid = {pid};\n"
+                        "var applied = false;\n"
+                        "var timer = new QTimer();\n"
+                        "timer.interval = 100;\n"
+                        "function apply(window) {\n"
+                        "  if (applied || !window || Number(window.pid) !== targetPid "
+                        "|| !window.normalWindow) return;\n"
+                        "  window.fullScreen = true;\n"
+                        "  if (!window.fullScreen) return;\n"
+                        "  applied = true;\n"
+                        "  timer.stop();\n"
+                        "  workspace.windowAdded.disconnect(apply);\n"
+                        "  callDBus('org.kde.KWin', '/Scripting', "
+                        "'org.kde.kwin.Scripting', 'unloadScript', "
+                        f"{json.dumps(script_name)});\n"
+                        "}\n"
+                        "workspace.windowAdded.connect(apply);\n"
+                        "function scan() {\n"
+                        "  var windows = workspace.stackingOrder;\n"
+                        "  for (var i = 0; i < windows.length; i++) apply(windows[i]);\n"
+                        "}\n"
+                        "timer.timeout.connect(scan);\n"
+                        "timer.start();\n"
+                        "scan();\n"
+                    )
+                else:
+                    script.write(activation_script)
 
             loaded = subprocess.run(
                 [
@@ -155,6 +220,23 @@ class WindowActivationManager:
             )
             if ran.returncode != 0:
                 return False, ran.stderr.strip() or "KWin could not run the activation script"
+            if fullscreen:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    loaded_state = subprocess.run(
+                        [qdbus, "org.kde.KWin", "/Scripting", "isScriptLoaded", script_name],
+                        capture_output=True, text=True, timeout=3, check=False,
+                    )
+                    if loaded_state.returncode != 0:
+                        return False, loaded_state.stderr.strip() or "Could not verify KWin fullscreen"
+                    state = loaded_state.stdout.strip().lower()
+                    if state == "false":
+                        script_id = None
+                        return True, "Website window entered fullscreen"
+                    if state != "true":
+                        return False, "KWin returned an invalid fullscreen status"
+                    time.sleep(0.1)
+                return False, "KWin could not put the launched website window into fullscreen within 10 seconds."
             return True, "Window activation requested through KWin"
         except (OSError, subprocess.SubprocessError) as error:
             return False, str(error)
