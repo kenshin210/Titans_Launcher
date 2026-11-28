@@ -1,16 +1,23 @@
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt
-from PyQt6.QtWidgets import QToolButton
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRect, QSize, Qt
+from PyQt6.QtWidgets import QSizePolicy, QToolButton
 
 
 class AnimatedLauncherButton(QToolButton):
+    ANIMATION_MARGIN = 8
+
     def __init__(self, parent=None, enable_animations=True, enable_glitch=False, theme_color="#DC143C"):
         super().__init__(parent)
         self.enable_animations = enable_animations
         self.enable_glitch = enable_glitch
         self.theme_color = theme_color
-        self.setFixedSize(225, 235)
+        self.setMinimumSize(210, 220)
+        self.setMaximumSize(235, 245)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.original_rect = QRect()
+
+    def sizeHint(self):
+        return QSize(225, 235)
 
     def set_original_geometry(self, rect: QRect):
         self.original_rect = rect

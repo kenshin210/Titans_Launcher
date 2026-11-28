@@ -774,7 +774,8 @@ class MainApp(QWidget, TaskRunnerMixin):
 
         self.apps_container = QWidget()
         self.apps_layout = QHBoxLayout(self.apps_container)
-        self.apps_layout.setContentsMargins(0, 0, 0, 0)
+        margin = AnimatedLauncherButton.ANIMATION_MARGIN
+        self.apps_layout.setContentsMargins(margin, margin, margin, margin)
         self.apps_layout.setSpacing(35)
         self.apps_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.main_layout.addWidget(self.apps_container)

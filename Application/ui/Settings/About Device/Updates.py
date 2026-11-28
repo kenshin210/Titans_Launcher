@@ -347,6 +347,11 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
             or (file_check and file_check.busy)
         ):
             return
+        removed = (self.launcher_update_service.remote_info or {}).get("removed_files", [])
+        removal_notice = (
+            f"\nThis update removes {len(removed)} launcher file(s) deleted from the source."
+            if removed else ""
+        )
         answer = QMessageBox.question(
             self,
             "Install launcher update",
@@ -355,7 +360,7 @@ class SystemUpdateWidget(QWidget, TaskRunnerMixin):
             f"{self.launcher_update_service.branch}?\n\n"
             f"Installed version: {self.launcher_update_service.current_version or 'Unavailable'}\n"
             f"Update version: {(self.launcher_update_service.remote_info or {}).get('version') or 'Not provided by source'}\n\n"
-            "Only install sources you trust; this will run their code. "
+            f"Only install sources you trust; this will run their code.{removal_notice}\n"
             "You will be asked to restart only if the update requires it.",
         )
         if answer == QMessageBox.StandardButton.Yes:

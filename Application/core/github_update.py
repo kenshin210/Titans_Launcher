@@ -53,6 +53,22 @@ def _parse_version(content):
     return version
 
 
+def _version_key(version):
+    parts = _parse_version(version.encode("utf-8")).split()
+    numbers = tuple(int(part) for part in parts[0].split("."))
+    numbers += (0,) * (3 - len(numbers))
+    stage = {"alpha": 0, "beta": 1, "rc": 2}.get(parts[1] if len(parts) > 1 else "", 3)
+    return numbers, stage, int(parts[2]) if len(parts) > 2 else 0
+
+
+def _remote_is_older(remote_version, installed_version):
+    return (
+        remote_version is not None
+        and installed_version is not None
+        and _version_key(remote_version) < _version_key(installed_version)
+    )
+
+
 def _read_url(url, accept, max_bytes):
     request = Request(
         url,
@@ -230,7 +246,10 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         version = self._read_installed_version()
         if version != self.current_version:
             self.current_version = version
-            self.changed.emit()
+            if self.remote_info is not None and not self.busy:
+                self._complete_check(self.remote_info)
+            else:
+                self.changed.emit()
 
     @property
     def channel(self):
@@ -339,7 +358,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             if remote["files"].get(name) != local_files.get(name)
         )
         return {**remote, "branch": branch, "repository": repository,
-                "channel": channel, "changed_files": changed_files}
+                "channel": channel, "changed_files": changed_files,
+                "removed_files": sorted(set(local_files) - set(remote["files"]))}
 
     def _complete_check(self, result):
         self.busy = False
@@ -350,7 +370,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             log_warning(self.status)
         else:
             self.remote_info = result
-            self.available = bool(result["changed_files"])
+            older = _remote_is_older(result.get("version"), self.current_version)
+            self.available = bool(result["changed_files"]) and not older
             if self.available:
                 self.status = (
                     f"Launcher update available on GitHub {result['repository']} "
@@ -358,6 +379,11 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
                     f"({result['sha'][:7]}; {len(result['changed_files'])} changed files)."
                 )
                 self._notify_available(result["sha"], result["branch"], result["repository"])
+            elif older:
+                self.status = (
+                    f"The launcher is up to date; GitHub {result['repository']} branch "
+                    f"{result['branch']} has an older version ({result['version']})."
+                )
             else:
                 self.status = (
                     f"The launcher is up to date with GitHub {result['repository']} branch {result['branch']}."
@@ -400,6 +426,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             log_warning(f"Could not show the launcher update notification: {error}")
 
     def install(self):
+        self._refresh_installed_version(str(self.root / "VERSION"))
         if self.busy or not self.available or self.remote_info is None:
             return
         self.busy = True
@@ -465,6 +492,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
     def _install_remote(self, remote_info):
         if not self.root.is_dir():
             raise RuntimeError(f"Launcher installation directory does not exist: {self.root}")
+        if _remote_is_older(remote_info.get("version"), self._read_installed_version()):
+            raise RuntimeError("The selected source has an older launcher version. Check again before installing.")
         if (self.root / ".git").exists():
             return self._update_git_checkout(remote_info)
         return self._update_archive(remote_info)

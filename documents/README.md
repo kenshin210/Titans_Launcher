@@ -334,6 +334,10 @@ Launcher updates:
 - Support a trusted public **Custom** repository and branch.
 - Run an initial background check after startup and then every six hours.
 - Require confirmation before downloading or installing an update.
+- Treat a source with an older `VERSION` as up to date; changes at the same
+  version can still be installed.
+- Remove obsolete managed launcher files deleted from the selected source.
+  Personal settings and untracked user files are not removed.
 - Refuse dirty Git checkouts rather than overwriting local changes.
 - Ask for a restart when changed code requires it.
 
