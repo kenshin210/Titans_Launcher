@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QComboBox
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
 from typing import Optional
 
 from Application.core.display_profiles import DisplayProfilesManager, DisplayProfile
@@ -388,7 +389,7 @@ class DisplayProfilesWidget(QWidget):
                 self.refresh_profiles()
             else:
                 log_error(f"Failed to create profile: {profile.name}")
-                QMessageBox.critical(self, "Error", "Failed to create profile. Name may already exist.")
+                QMessageBox.critical(self, "Error", "Failed to create profile. Check the name and launcher logs.")
 
     def apply_selected_profile(self):
         """Apply the selected display profile."""
@@ -398,6 +399,7 @@ class DisplayProfilesWidget(QWidget):
         profile = self.profile_manager.get_profile(self.selected_profile_name)
         if profile is None:
             log_error("Selected profile not found")
+            QMessageBox.warning(self, "Profile Unavailable", "The selected display profile no longer exists.")
             return
 
         if self.profile_manager.apply_profile(self.selected_profile_name):
@@ -414,6 +416,11 @@ class DisplayProfilesWidget(QWidget):
             self.refresh_profiles()
         else:
             log_error("Failed to apply profile")
+            QMessageBox.warning(
+                self, "Profile Not Applied",
+                "Could not apply or save the display profile. Display settings may have partially changed. "
+                "Check the connected display and launcher logs.",
+            )
 
     def save_current_display(self):
         """Save the current display settings as a new profile."""
@@ -536,3 +543,4 @@ class DisplayProfilesWidget(QWidget):
                 self.refresh_profiles()
             else:
                 log_error("Failed to delete profile")
+                QMessageBox.critical(self, "Error", "Failed to delete profile. Check the launcher logs.")

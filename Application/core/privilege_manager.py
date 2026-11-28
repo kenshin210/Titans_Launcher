@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from Application.core.privilege_audit import PrivilegeAuditError, PrivilegeAuditLog
+from Application.core.packages import elevation_prefix, passwordless_pacman_available
 from Application.ui.Settings.Logger import log_error, log_info, log_warning
 
 
@@ -155,7 +156,9 @@ class PrivilegeManager:
         policy = PRIVILEGE_OPERATIONS.get(operation)
         if policy is None:
             return False, "This privileged operation is not registered."
-        if not self._role_allows(self.role, policy["minimum_role"]):
+        if not self._role_allows(self.role, policy["minimum_role"]) and not (
+            operation in {"system_update", "package_repair"} and passwordless_pacman_available()
+        ):
             return False, f"Requires the {policy['minimum_role']} role."
         if policy["requires_elevation"] and not self.can_elevate():
             return False, "No supported privilege escalation method is available."
@@ -224,6 +227,12 @@ class PrivilegeManager:
         Returns:
             Full command with elevation prefix, or original if no elevation needed
         """
+        if not use_stdin and (
+            not command or (shutil.which("pacman") and command[0] == shutil.which("pacman"))
+        ):
+            prefix = elevation_prefix(require_check=not command)
+            if prefix:
+                return prefix + command
         method = self.get_elevation_method()
 
         if method == "pkexec":

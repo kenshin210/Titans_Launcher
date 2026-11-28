@@ -73,6 +73,7 @@ class AxisRepeater:
 
 class PygameControllerThread(QThread):
     raw_input = pyqtSignal(str)
+    controller_input = pyqtSignal(str, bool)
     initialized = pyqtSignal()
     button_pressed = pyqtSignal(int, int)
     button_released = pyqtSignal(int, int)
@@ -120,6 +121,10 @@ class PygameControllerThread(QThread):
         shortcuts = ControllerShortcut()
         initialized = False
 
+        def emit_input(input_name, is_x=False):
+            self.controller_input.emit(input_name, is_x)
+            self.raw_input.emit(input_name)
+
         while not self._stop_event.is_set() and not self.isInterruptionRequested():
             try:
                 if not pygame.joystick.get_init():
@@ -164,7 +169,8 @@ class PygameControllerThread(QThread):
                         inputs, activate = shortcuts.button(event.instance_id, event.button, True, mapping)
                         for input_name in inputs:
                             self.button_pressed.emit(event.instance_id, event.button)
-                            self.raw_input.emit(input_name)
+                            x_button = mapping[1] if mapping else 2
+                            emit_input(input_name, event.button == x_button)
                         if activate:
                             self.keyboard_shortcut.emit()
                     elif event.type == pygame.JOYBUTTONUP:
@@ -172,7 +178,7 @@ class PygameControllerThread(QThread):
                         mapping = pointer_poller.button_mapping(event.instance_id) if pointer_poller else None
                         inputs, activate = shortcuts.button(event.instance_id, event.button, False, mapping)
                         for input_name in inputs:
-                            self.raw_input.emit(input_name)
+                            emit_input(input_name)
                         if activate:
                             self.keyboard_shortcut.emit()
                     elif event.type == pygame.JOYDEVICEREMOVED:
@@ -183,19 +189,19 @@ class PygameControllerThread(QThread):
                     elif event.type == pygame.JOYHATMOTION:
                         hat_x, hat_y = event.value
                         if hat_x == 1:
-                            self.raw_input.emit("hat:right")
+                            emit_input("hat:right")
                         elif hat_x == -1:
-                            self.raw_input.emit("hat:left")
+                            emit_input("hat:left")
                         if hat_y == 1:
-                            self.raw_input.emit("hat:up")
+                            emit_input("hat:up")
                         elif hat_y == -1:
-                            self.raw_input.emit("hat:down")
+                            emit_input("hat:down")
                     elif event.type == pygame.JOYAXISMOTION:
                         axis_input = axis_repeater.update(
                             event.instance_id, event.axis, event.value, time.monotonic()
                         )
                         if axis_input:
-                            self.raw_input.emit(axis_input)
+                            emit_input(axis_input)
 
                 for axis_input in axis_repeater.due(time.monotonic()):
                     self.axis_repeat.emit(axis_input)
@@ -290,8 +296,6 @@ class BrowserPointerPoller:
             return None
         mapping = controller.get_mapping()
         names = (mapping.get("guide", ""), mapping.get("x", ""), mapping.get("b", ""))
-        if not names[0].startswith("b") or not names[0][1:].isdigit():
-            return None
         buttons = tuple(int(name[1:]) if name.startswith("b") and name[1:].isdigit() else None
                         for name in names)
         return buttons if any(button is not None for button in buttons[1:]) else None

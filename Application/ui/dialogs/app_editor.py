@@ -22,6 +22,7 @@ from ...styles import load_stylesheet
 
 from Application.ui.dialogs.file_picker import ControllerFileDialog
 from Application.ui.Settings.Logger import log_warning
+from Application.core.website import WEBSITE_DISPLAY_MODES, website_arguments
 
 
 class ApplicationEditorDialog(QDialog):
@@ -36,6 +37,7 @@ class ApplicationEditorDialog(QDialog):
         controller_close_enabled=False,
         app_type="application",
         website_url="",
+        website_display_mode="kiosk",
     ):
         super().__init__(parent)
         theme_color = getattr(parent, "get_theme_color", lambda: "#DC143C")()
@@ -78,6 +80,18 @@ class ApplicationEditorDialog(QDialog):
         self.website_browser_input.setPlaceholderText("firefox")
         website_form.addRow("Website URL:", self.website_url_input)
         website_form.addRow("Browser executable:", self.website_browser_input)
+        self.website_display_mode_combo = QComboBox()
+        for mode, label in WEBSITE_DISPLAY_MODES.items():
+            self.website_display_mode_combo.addItem(label, mode)
+        mode_index = self.website_display_mode_combo.findData(website_display_mode)
+        if mode_index < 0:
+            log_warning(f"Invalid website display mode {website_display_mode!r}; using kiosk.")
+            mode_index = self.website_display_mode_combo.findData("kiosk")
+        self.website_display_mode_combo.setCurrentIndex(mode_index)
+        self.website_display_mode_combo.setToolTip(
+            "Firefox display mode. Fullscreen requires KDE Wayland and qdbus."
+        )
+        website_form.addRow("Display mode:", self.website_display_mode_combo)
         self.mode_stack.addWidget(website_fields)
         self.type_combo.currentIndexChanged.connect(
             lambda: self.mode_stack.setCurrentIndex(self.type_combo.currentIndex())
@@ -160,6 +174,16 @@ class ApplicationEditorDialog(QDialog):
             if not self.website_browser_input.text().strip():
                 QMessageBox.warning(self, "Missing Browser", "Enter a browser executable.")
                 return
+            if (
+                self.website_display_mode_combo.currentData() in ("maximized", "fullscreen")
+                and Path(self.website_browser_input.text().strip()).name.lower()
+                not in ("firefox", "firefox-esr")
+            ):
+                QMessageBox.warning(
+                    self, "Unsupported Browser",
+                    "Maximized and Fullscreen display modes require Firefox.",
+                )
+                return
             super().accept()
             return
 
@@ -183,21 +207,23 @@ class ApplicationEditorDialog(QDialog):
         if app_type == "website":
             website_url = self.website_url_input.text().strip()
             command = self.website_browser_input.text().strip()
-            arguments = f"--kiosk {shlex.quote(website_url)}"
+            website_display_mode = self.website_display_mode_combo.currentData()
+            arguments = shlex.join(website_arguments(website_display_mode, website_url))
         else:
             website_url = ""
+            website_display_mode = None
             command = self.cmd_input.text().strip()
             arguments = self.args_input.text().strip()
-        return (
-            self.name_input.text().strip(),
-            {
-                "type": app_type,
-                "website_url": website_url,
-                "command": command,
-                "arguments": arguments,
-                "controller_close_enabled": self.controller_close_cb.isChecked(),
-                "manage_antimicrox": self.manage_am_cb.isChecked(),
-                "profile": self.profile_input.text().strip(),
-                "icon_path": "",
-            },
-        )
+        data = {
+            "type": app_type,
+            "website_url": website_url,
+            "command": command,
+            "arguments": arguments,
+            "controller_close_enabled": self.controller_close_cb.isChecked(),
+            "manage_antimicrox": self.manage_am_cb.isChecked(),
+            "profile": self.profile_input.text().strip(),
+            "icon_path": "",
+        }
+        if app_type == "website":
+            data["website_display_mode"] = website_display_mode
+        return self.name_input.text().strip(), data

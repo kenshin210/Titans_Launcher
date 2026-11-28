@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from urllib.request import Request, urlopen
 from urllib.parse import quote
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QFileSystemWatcher, QObject, QTimer, pyqtSignal
 
 from Application.core.config import PROJECT_ROOT
 from Application.core.file_check import (
@@ -33,7 +33,40 @@ UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000
 MAX_API_RESPONSE_BYTES = 5_000_000
 MAX_ARCHIVE_BYTES = 100_000_000
 MAX_ARCHIVE_FILE_BYTES = 50_000_000
-RESTART_FREE_FILES = {"ArchModuleInstall.sh", "generate_launcher_manifest.py"}
+MAX_VERSION_BYTES = 64
+RESTART_FREE_FILES = {
+    "ArchModuleInstall.sh", "SetupAutostart.sh", "InstallerDialogs.sh",
+    "generate_launcher_manifest.py",
+    "VERSION",
+}
+
+
+def _parse_version(content):
+    if len(content) > MAX_VERSION_BYTES:
+        raise ValueError("Launcher VERSION metadata is too large.")
+    try:
+        version = content.decode("utf-8").strip()
+    except UnicodeDecodeError as error:
+        raise ValueError("Launcher VERSION metadata must be UTF-8 text.") from error
+    if not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?(?: (?:alpha|beta|rc)(?: [0-9]+)?)?", version):
+        raise ValueError("Invalid launcher VERSION metadata; expected a version such as 0.01 alpha.")
+    return version
+
+
+def _version_key(version):
+    parts = _parse_version(version.encode("utf-8")).split()
+    numbers = tuple(int(part) for part in parts[0].split("."))
+    numbers += (0,) * (3 - len(numbers))
+    stage = {"alpha": 0, "beta": 1, "rc": 2}.get(parts[1] if len(parts) > 1 else "", 3)
+    return numbers, stage, int(parts[2]) if len(parts) > 2 else 0
+
+
+def _remote_is_older(remote_version, installed_version):
+    return (
+        remote_version is not None
+        and installed_version is not None
+        and _version_key(remote_version) < _version_key(installed_version)
+    )
 
 
 def _read_url(url, accept, max_bytes):
@@ -119,11 +152,23 @@ def fetch_branch_tree(branch, repository=GITHUB_REPOSITORY):
     if not files:
         raise ValueError(f"GitHub's {branch} branch contains no launcher build files.")
 
+    version = None
+    if "VERSION" in files:
+        content = _read_url(
+            f"https://raw.githubusercontent.com/{repository}/{commit_sha}/VERSION",
+            "text/plain", MAX_VERSION_BYTES,
+        )
+        if _git_blob_sha(content) != files["VERSION"]:
+            raise ValueError("GitHub VERSION metadata hash mismatch.")
+        version = _parse_version(content)
+    else:
+        log_warning(f"GitHub {repository} branch {branch} does not provide VERSION metadata.")
     message = commit.get("commit", {}).get("message", "")
     return {
         "sha": commit_sha,
         "message": message.splitlines()[0] if isinstance(message, str) and message else "",
         "files": files,
+        "version": version,
     }
 
 
@@ -165,6 +210,13 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         self.restart_required = False
         self.status = "GitHub update check has not run yet."
         self.remote_info = None
+        self.current_version = self._read_installed_version()
+        self._version_watcher = QFileSystemWatcher(self)
+        if self.root.is_dir():
+            self._version_watcher.addPath(str(self.root))
+        self._watch_version_file()
+        self._version_watcher.fileChanged.connect(self._refresh_installed_version)
+        self._version_watcher.directoryChanged.connect(self._refresh_installed_version)
         try:
             self._runtime_manifest = make_manifest(self.root)
         except OSError as error:
@@ -176,6 +228,28 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         if auto_start:
             self._timer.start()
             QTimer.singleShot(15_000, self.check)
+
+    def _read_installed_version(self):
+        try:
+            return _parse_version((self.root / "VERSION").read_bytes())
+        except (OSError, ValueError) as error:
+            log_warning(f"Installed launcher version is unavailable: {error}")
+            return None
+
+    def _watch_version_file(self):
+        path = str(self.root / "VERSION")
+        if os.path.isfile(path) and path not in self._version_watcher.files():
+            self._version_watcher.addPath(path)
+
+    def _refresh_installed_version(self, _path):
+        self._watch_version_file()
+        version = self._read_installed_version()
+        if version != self.current_version:
+            self.current_version = version
+            if self.remote_info is not None and not self.busy:
+                self._complete_check(self.remote_info)
+            else:
+                self.changed.emit()
 
     @property
     def channel(self):
@@ -284,7 +358,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             if remote["files"].get(name) != local_files.get(name)
         )
         return {**remote, "branch": branch, "repository": repository,
-                "channel": channel, "changed_files": changed_files}
+                "channel": channel, "changed_files": changed_files,
+                "removed_files": sorted(set(local_files) - set(remote["files"]))}
 
     def _complete_check(self, result):
         self.busy = False
@@ -295,7 +370,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             log_warning(self.status)
         else:
             self.remote_info = result
-            self.available = bool(result["changed_files"])
+            older = _remote_is_older(result.get("version"), self.current_version)
+            self.available = bool(result["changed_files"]) and not older
             if self.available:
                 self.status = (
                     f"Launcher update available on GitHub {result['repository']} "
@@ -303,6 +379,11 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
                     f"({result['sha'][:7]}; {len(result['changed_files'])} changed files)."
                 )
                 self._notify_available(result["sha"], result["branch"], result["repository"])
+            elif older:
+                self.status = (
+                    f"The launcher is up to date; GitHub {result['repository']} branch "
+                    f"{result['branch']} has an older version ({result['version']})."
+                )
             else:
                 self.status = (
                     f"The launcher is up to date with GitHub {result['repository']} branch {result['branch']}."
@@ -345,6 +426,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             log_warning(f"Could not show the launcher update notification: {error}")
 
     def install(self):
+        self._refresh_installed_version(str(self.root / "VERSION"))
         if self.busy or not self.available or self.remote_info is None:
             return
         self.busy = True
@@ -366,6 +448,7 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         else:
             self.available = False
             self.remote_info = None
+            self.current_version = self._read_installed_version()
             installed_manifest = result.get("installed_manifest")
             changed_files = result.get("changed_files")
             if (
@@ -409,6 +492,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
     def _install_remote(self, remote_info):
         if not self.root.is_dir():
             raise RuntimeError(f"Launcher installation directory does not exist: {self.root}")
+        if _remote_is_older(remote_info.get("version"), self._read_installed_version()):
+            raise RuntimeError("The selected source has an older launcher version. Check again before installing.")
         if (self.root / ".git").exists():
             return self._update_git_checkout(remote_info)
         return self._update_archive(remote_info)
@@ -438,6 +523,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
         repository = remote_info.get("repository", GITHUB_REPOSITORY)
         validate_custom_source(repository, branch)
         self._run_git("fetch", "--no-tags", f"https://github.com/{repository}.git", f"refs/heads/{branch}")
+        if remote_info.get("version") is not None and self._run_git("rev-parse", "FETCH_HEAD") != remote_info["sha"]:
+            raise RuntimeError("The versioned update changed since the check. Check again before installing.")
         if remote_info.get("channel") == "Custom":
             if self._run_git("rev-parse", "FETCH_HEAD") != remote_info["sha"]:
                 raise RuntimeError("The custom branch changed since the update check. Check again before installing.")
@@ -447,6 +534,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
             self._run_git("merge", "--ff-only", "FETCH_HEAD")
         else:
             self._run_git("switch", "--create", branch, "FETCH_HEAD")
+        if (self.root / "VERSION").is_file():
+            _parse_version((self.root / "VERSION").read_bytes())
         installed_manifest = make_manifest(self.root)
         manifest_path = self.root / MANIFEST_NAME
         with tempfile.NamedTemporaryFile(
@@ -531,6 +620,8 @@ class GitHubUpdateService(QObject, TaskRunnerMixin):
                     raise ValueError(f"GitHub archive hash mismatch for {name}.")
                 staged_data[name] = content
 
+        if "VERSION" in staged_data:
+            _parse_version(staged_data["VERSION"])
         manifest = {
             name: hashlib.sha256(content).hexdigest()
             for name, content in staged_data.items()

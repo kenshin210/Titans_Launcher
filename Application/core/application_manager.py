@@ -198,6 +198,7 @@ class ApplicationManager:
                 environment=environment or {},
                 state=AppState.STARTING.value,
                 launched_at=datetime.now().isoformat(),
+                crashes=self.running_apps[app_id].crashes if app_id in self.running_apps else 0,
             )
             
             # Create heartbeat file for crash detection
@@ -262,6 +263,9 @@ class ApplicationManager:
             process = self._processes.get(app_id)
             if process is None:
                 return False, f"App {app.name} is not running in this launcher session"
+            if process.poll() is not None:
+                self.check_app_health(app_id)
+                return True, f"App {app.name} already exited"
             
             # Send signal to process group (since we used start_new_session)
             import signal
@@ -322,14 +326,22 @@ class ApplicationManager:
             process = self._processes.get(app_id)
             if process is None:
                 return False, "Process is not managed by this launcher session"
-            if process.poll() is None:
-                app.state = AppState.RUNNING.value
+            return_code = process.poll()
+            if return_code is None:
+                if app.state != AppState.STOPPING.value:
+                    app.state = AppState.RUNNING.value
                 return True, "Running"
-            app.state = AppState.STOPPED.value
-            app.terminated_at = datetime.now().isoformat()
             self._processes.pop(app_id, None)
-            self._save_app_state()
-            return False, "Process exited"
+            app.pid = None
+            app.heartbeat_file = None
+            status = f"Process exited with return code {return_code}"
+            if return_code != 0 and app.state != AppState.STOPPING.value:
+                self.record_app_crash(app_id, status)
+            else:
+                app.state = AppState.STOPPED.value
+                app.terminated_at = datetime.now().isoformat()
+                self._save_app_state()
+            return False, status
         
         except Exception as e:
             logger.error(f"Error checking app health: {e}")
@@ -359,27 +371,36 @@ class ApplicationManager:
             app_id: Application identifier
             reason: Description of crash
         """
+        if app_id not in self.running_apps:
+            logger.warning("Cannot record a crash for unmanaged app %s", app_id)
+            return
+
+        app = self.running_apps[app_id]
+        app.crashes += 1
+        app.state = AppState.CRASHED.value
+        app.terminated_at = datetime.now().isoformat()
         try:
-            if app_id not in self.running_apps:
-                return
-            
-            app = self.running_apps[app_id]
-            app.crashes += 1
-            app.state = AppState.CRASHED.value
-            app.terminated_at = datetime.now().isoformat()
-            
-            # Log crash
             crash_log = self.log_dir / "app_crashes.log"
-            with open(crash_log, "a") as f:
+            with crash_log.open("a", encoding="utf-8") as f:
                 f.write(f"{datetime.now().isoformat()} - {app.name} ({app_id}): {reason}\n")
-            
-            self._save_app_state()
-            logger.warning(f"App {app.name} crashed: {reason}")
-            
-            # Don't automatically restart - let Titans UI decide
-        
-        except Exception as e:
+        except OSError as e:
             logger.error(f"Failed to record crash for {app_id}: {e}")
+        self._save_app_state()
+        logger.warning(f"App {app.name} crashed: {reason}")
+
+    def get_app_process(self, app_id: str) -> Optional[subprocess.Popen]:
+        """Return the child process owned by this launcher session."""
+        return self._processes.get(app_id)
+
+    def mark_app_stopping(self, app_id: str) -> None:
+        """Mark a successfully requested asynchronous close as intentional."""
+        app = self.running_apps.get(app_id)
+        if app is None or app_id not in self._processes:
+            logger.warning("Cannot mark unmanaged app %s as stopping", app_id)
+            return
+        if app.state == AppState.RUNNING.value:
+            app.state = AppState.STOPPING.value
+            self._save_app_state()
 
     def get_running_apps(self) -> List[AppInfo]:
         """Get list of all running applications.
@@ -449,11 +470,8 @@ class ApplicationManager:
                 time.sleep(check_interval)
                 
                 # Check each app
-                for app_id in list(self.running_apps.keys()):
-                    is_healthy, status = self.check_app_health(app_id)
-                    
-                    if not is_healthy and self.running_apps[app_id].state == AppState.RUNNING.value:
-                        self.record_app_crash(app_id, status)
+                for app_id in list(self._processes):
+                    self.check_app_health(app_id)
                 
                 # Periodically clean up
                 if int(time.time()) % 60 == 0:

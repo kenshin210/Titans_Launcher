@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from pathlib import Path
 
 from Application.ui.Settings.Logger import log_error, log_info
@@ -117,6 +119,7 @@ DEFAULT_CONFIG = {
         "arguments": "--kiosk https://www.youtube.com",
         "type": "website",
         "website_url": "https://www.youtube.com",
+        "website_display_mode": "kiosk",
         "manage_antimicrox": True,
         "profile": "",
         "controller_close_enabled": False,
@@ -127,6 +130,7 @@ DEFAULT_CONFIG = {
         "arguments": "--kiosk https://tv.google/",
         "type": "website",
         "website_url": "https://tv.google/",
+        "website_display_mode": "kiosk",
         "manage_antimicrox": True,
         "profile": "",
         "controller_close_enabled": False,
@@ -224,10 +228,24 @@ def load_config():
 
 
 def save_config(data):
+    temporary_path = None
     try:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with CONFIG_PATH.open("w", encoding="utf-8") as config_file:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=CONFIG_PATH.parent,
+            prefix=f".{CONFIG_PATH.name}.", delete=False,
+        ) as config_file:
+            temporary_path = Path(config_file.name)
             json.dump(data, config_file, indent=4)
+            config_file.flush()
+            os.fsync(config_file.fileno())
+        os.replace(temporary_path, CONFIG_PATH)
         log_info(f"Configuration saved to {CONFIG_PATH}")
-    except Exception as error:
+    except (OSError, TypeError, ValueError) as error:
         log_error(f"Failed to save configuration: {error}", details=str(error))
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError as error:
+                log_error(f"Failed to remove temporary configuration: {error}", details=str(error))

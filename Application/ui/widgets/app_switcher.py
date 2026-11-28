@@ -105,9 +105,9 @@ class AppSwitcherWidget(QWidget):
     app_terminated = pyqtSignal(str)  # Emits app_id
     app_launched = pyqtSignal(str)  # Emits app_id
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, app_manager: Optional[ApplicationManager] = None):
         super().__init__(parent)
-        self.app_manager = ApplicationManager()
+        self.app_manager = app_manager if app_manager is not None else ApplicationManager()
         self.app_buttons: Dict[str, AppButton] = {}
         self.selected_app_id: Optional[str] = None
         
@@ -203,7 +203,7 @@ class AppSwitcherWidget(QWidget):
         """Update the display with current running apps."""
         try:
             for app_id, app in self.app_manager.get_all_apps().items():
-                if app.state == "running":
+                if app.state in {"running", "stopping"}:
                     self.app_manager.check_app_health(app_id)
             running_apps = self.app_manager.get_running_apps()
             all_apps = self.app_manager.get_all_apps()
@@ -233,7 +233,7 @@ class AppSwitcherWidget(QWidget):
                 if button is None:
                     button = AppButton(app_info)
                     button.clicked.connect(lambda checked, aid=app_id: self._on_app_selected(aid))
-                elif button.app_info != app_info:
+                elif button.text() != f"{app_info.name}\n({app_info.state})":
                     button.update_info(app_info)
                 self.app_buttons[app_id] = button
                 self.app_grid.addWidget(button, row, col)

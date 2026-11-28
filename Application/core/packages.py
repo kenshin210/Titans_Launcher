@@ -56,8 +56,30 @@ def run_pacman(arguments, timeout=30):
         return subprocess.CompletedProcess(command, 127, "", str(error))
 
 
-def elevation_prefix():
+def passwordless_pacman_available(require_check=False):
+    sudo = shutil.which("sudo")
+    if not sudo or not shutil.which("pacman"):
+        return False
+    try:
+        commands = [["/usr/bin/pacman"]]
+        if require_check:
+            commands.append(["/usr/bin/env", "LC_ALL=C", "/usr/bin/pacman",
+                             "-Qkk", "--color", "never"])
+        return all(
+            subprocess.run(
+                [sudo, "-n", "-l", *command],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False,
+            ).returncode == 0
+            for command in commands
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def elevation_prefix(require_check=False):
     """Command prefix that gains root without a terminal, or None when unavailable."""
+    if passwordless_pacman_available(require_check=require_check):
+        return ["sudo", "-n"]
     if shutil.which("pkexec"):
         return ["pkexec"]
     if shutil.which("sudo"):
@@ -118,13 +140,25 @@ def search_packages(query, limit=48):
     if not terms:
         return []
     result = run_pacman(["-Ss", "--", *terms], timeout=30)
-    if result.returncode not in (0, 1):
+    if result.returncode not in (0, 1) or (result.returncode == 1 and result.stderr.strip()):
         raise RuntimeError((result.stderr or "pacman search failed").strip())
     return parse_search(result.stdout)[:limit]
 
 
 def featured_packages():
-    result = run_pacman(["-Si", "--", *FEATURED_PACKAGES], timeout=30)
+    listing = run_pacman(["-Sl"], timeout=30)
+    if listing.returncode != 0:
+        raise RuntimeError((listing.stderr or "could not read repository packages").strip())
+    available = {
+        fields[1] for line in listing.stdout.splitlines()
+        if len(fields := line.split()) >= 3
+    }
+    names = [name for name in FEATURED_PACKAGES if name in available]
+    if not names:
+        return []
+    result = run_pacman(["-Si", "--", *names], timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "could not read suggested package details").strip())
     found = []
     for block in parse_blocks(result.stdout):
         if block.get("Name"):
@@ -140,7 +174,9 @@ def featured_packages():
 
 def installed_names():
     result = run_pacman(["-Qq"], timeout=15)
-    return set(result.stdout.split()) if result.returncode == 0 else set()
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or "could not read installed package names").strip())
+    return set(result.stdout.split())
 
 
 def _dependency_name(entry):

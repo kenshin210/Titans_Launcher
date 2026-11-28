@@ -14,7 +14,10 @@ ROOT_BUILD_FILES = {
     "launcher.py",
     "LinuxStartup.sh",
     "ArchModuleInstall.sh",
+    "SetupAutostart.sh",
+    "InstallerDialogs.sh",
     "generate_launcher_manifest.py",
+    "VERSION",
 }
 BUILD_ASSET_FOLDERS = {"Icons", "Sounds", "Styles"}
 
@@ -39,9 +42,12 @@ def is_build_file_name(name):
 def build_files(root):
     files = [
         root / "launcher.py", root / "LinuxStartup.sh", root / "ArchModuleInstall.sh",
+        root / "SetupAutostart.sh", root / "InstallerDialogs.sh",
         root / "generate_launcher_manifest.py",
     ]
     files.extend((root / "Application").rglob("*.py"))
+    if (root / "VERSION").is_file():
+        files.append(root / "VERSION")
     for folder in ("Icons", "Sounds", "Styles"):
         files.extend(path for path in (root / "Assets" / folder).rglob("*") if path.is_file())
     return sorted(path.relative_to(root).as_posix() for path in files)

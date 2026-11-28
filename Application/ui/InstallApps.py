@@ -122,8 +122,8 @@ class InstallAppsWidget(QWidget, TaskRunnerMixin):
             self.search_button.setEnabled(True)
             if isinstance(result, Exception):
                 log_warning("Install Apps: package lookup failed.", details=str(result))
-                self.status.setText(f"Could not read the package list: {result}")
                 self.populate([])
+                self.status.setText(f"Could not read the package list: {result}")
                 return
             self.populate(result)
 

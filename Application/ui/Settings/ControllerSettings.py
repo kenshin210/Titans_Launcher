@@ -57,6 +57,8 @@ class ControllerSettingsWidget(QWidget):
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         outer_layout.addWidget(scroll)
         content = QWidget()
+        content.setObjectName("controllerSettingsContent")
+        content.setStyleSheet("QWidget#controllerSettingsContent { background: transparent; }")
         scroll.setWidget(content)
         layout = QVBoxLayout(content)
         layout.setContentsMargins(35, 35, 35, 35)

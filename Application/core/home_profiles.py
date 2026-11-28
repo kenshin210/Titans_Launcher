@@ -1,5 +1,7 @@
 """Persistence helpers for home-screen profiles and dashboard layouts."""
 
+from Application.ui.Settings.Logger import log_warning
+
 
 def application_names(config):
     return [name for name, value in config.items() if not name.startswith("_") and isinstance(value, dict)]
@@ -48,3 +50,14 @@ def ordered_home_applications(config, names=None):
     profile = profiles[config["_active_home_profile"]]
     hidden = set(profile["hidden"])
     return [name for name in profile["order"] if name not in hidden]
+
+
+def home_application_pages(config):
+    names = ordered_home_applications(config)
+    if not config.get("_home_pages_enabled", True):
+        return [names]
+    size = config.get("_home_page_size", 6)
+    if not isinstance(size, int) or isinstance(size, bool) or not 1 <= size <= 30:
+        log_warning(f"Invalid Home page size {size!r}; using 6.")
+        size = 6
+    return [names[index:index + size] for index in range(0, len(names), size)] or [[]]

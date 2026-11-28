@@ -97,6 +97,13 @@ def handle_home_navigation(launcher, action):
 
     if action in ("left", "right"):
         direction = 1 if action == "right" else -1
+        if tiles and (
+            (focused is tiles[-1] and direction == 1)
+            or (focused is tiles[0] and direction == -1)
+        ):
+            change_page = getattr(launcher, "change_home_page", None)
+            if callable(change_page) and change_page(direction):
+                return True
         sequence[(sequence.index(focused) + direction) % len(sequence)].setFocus()
         return True
 

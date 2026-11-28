@@ -28,6 +28,9 @@ from Application.ui.Settings.TaskManager.TaskManagerWidget import TaskManagerWid
 from Application.ui.Settings.AccessibilitySettingsWidget import AccessibilitySettingsWidget
 from Application.ui.Settings.HomeProfilesWidget import HomeProfilesWidget
 from Application.ui.Settings.StartupScreenSettings import StartupScreenSettingsWidget
+from Application.ui.Settings.BrowserSettingsWidget import BrowserSettingsWidget
+from Application.ui.Settings.ScreensaverSettings import ScreensaverSettingsWidget
+from Application.ui.Settings.CastSettings import CastSettingsWidget
 
 AboutDeviceWidget = import_module(
     "Application.ui.Settings.About Device.AboutDeviceSettings"
@@ -78,7 +81,10 @@ class BasicSettingsWidget(QWidget):
         self.general_subsections = [
             ("General", "general", self.create_general_page),
             ("Background", "background", self.create_background_page),
+            ("Screensaver", "screensaver", lambda: ScreensaverSettingsWidget(self.launcher)),
+            ("Cast", "cast", lambda: CastSettingsWidget(self.launcher)),
             ("Startup", "startup", lambda: StartupScreenSettingsWidget(self.launcher)),
+            ("Browser", "browser", lambda: BrowserSettingsWidget(self.launcher)),
             ("Theme", "theme", self.create_theme_page),
             ("Buttons", "buttons", lambda: ButtonStyleWidget(self.launcher)),
             ("Weather", "weather", lambda: WeatherSettingsWidget(self.launcher)),
